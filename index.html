@@ -1068,8 +1068,7 @@ window.addEventListener('keydown', e => {
       startGame();
     } else if (gameState === 'victory' && victoryScrollDone) {
       // Full restart after victory scroll completes
-      victoryMusic.pause();
-      victoryMusic.currentTime = 0;
+      clearGameState();
       gameState = 'menu';
       menuScrollY = -480;
       titleMusic.currentTime = 0;
@@ -1083,9 +1082,9 @@ window.addEventListener('keydown', e => {
 
   // Escape exits dojo back to menu
   if (e.code === 'Escape' && gameState === 'dojo') {
+    clearGameState();
     gameState = 'menu';
-    menuScrollY = -480; // reset with pause
-    getDojoMusic().pause();
+    menuScrollY = -480;
     titleMusic.currentTime = 0;
     titleMusic.play().catch(() => {});
     return;
@@ -1120,7 +1119,7 @@ canvas.addEventListener('touchstart', e => {
   }
   if (gameState === 'transition') return;
   if (gameState === 'victory' && !victoryScrollDone) return;
-  if (gameState === 'victory') { victoryMusic.pause(); victoryMusic.currentTime = 0; gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
+  if (gameState === 'victory') { clearGameState(); gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
   if (gameState === 'dead' && deathTimer < DEATH_RESTART_DELAY) return;
   if (gameState === 'gameover' && !gameOverScrollDone) return;
   if (gameState === 'dead') { respawnPlayer(); return; }
@@ -1138,7 +1137,7 @@ canvas.addEventListener('mousedown', () => {
   }
   if (gameState === 'transition') return;
   if (gameState === 'victory' && !victoryScrollDone) return;
-  if (gameState === 'victory') { victoryMusic.pause(); victoryMusic.currentTime = 0; gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
+  if (gameState === 'victory') { clearGameState(); gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
   if (gameState === 'dead' && deathTimer < DEATH_RESTART_DELAY) return;
   if (gameState === 'gameover' && !gameOverScrollDone) return;
   if (gameState === 'dead') { respawnPlayer(); return; }
@@ -1148,6 +1147,35 @@ canvas.addEventListener('mousedown', () => {
 });
 
 // ── GAME CONTROL ──
+function clearGameState() {
+  // Wipe all gameplay arrays and audio to ensure clean slate
+  lavaDrops = [];
+  lavaPools = [];
+  particles = [];
+  warningMarkers = [];
+  vehicles = [];
+  explosions = [];
+  vehicleDebris = [];
+  shakeTimer = 0;
+  flashTimer = 0;
+  deathTimer = 0;
+  levelTimer = 0;
+  creditsTimer = 0;
+  scrollOffset = 0;
+  frameCount = 0;
+  stopSiren();
+  stopPoliceSiren();
+  stopBusScream();
+  stopBuzz();
+  levelMusic.pause();
+  levelMusic.currentTime = 0;
+  gameOverMusic.pause();
+  gameOverMusic.currentTime = 0;
+  victoryMusic.pause();
+  victoryMusic.currentTime = 0;
+  dojoTracks.forEach(t => { t.pause(); t.currentTime = 0; });
+}
+
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
@@ -2184,7 +2212,15 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
       for (let wx = bx + winMargin; wx + winW < bx + bw - winMargin; wx += winSpacingX) {
         const hash = ((wx * 7 + wy * 13) & 0xFF);
         if (hash > 80) {
-          ctx.fillStyle = winColors[hash % 5];
+          // ~5% of lit windows flicker (determined by hash)
+          if ((hash & 0x1F) === 0) {
+            // Flickering window — blinks on/off based on frameCount
+            const flickerSpeed = 0.07 + (hash & 0x07) * 0.02;
+            const on = Math.sin(frameCount * flickerSpeed + hash) > -0.2;
+            ctx.fillStyle = on ? winColors[hash % 5] : darkWin;
+          } else {
+            ctx.fillStyle = winColors[hash % 5];
+          }
           ctx.fillRect(wx, wy, winW, winH);
         } else {
           ctx.fillStyle = darkWin;
