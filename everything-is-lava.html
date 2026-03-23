@@ -528,7 +528,7 @@ let warningMarkers = []; // where drops will land
 // ── EMERGENCY VEHICLES ──
 let vehicles = [];
 
-function spawnVehicle(forceType) {
+function spawnVehicle(forceType, forceLadder) {
   const types = ['firetruck', 'ambulance', 'police'];
   const type = forceType || types[Math.random() * types.length | 0];
   const isSchoolBus = type === 'schoolbus';
@@ -536,8 +536,8 @@ function spawnVehicle(forceType) {
   const offscreenDist = 350;
   const vw = isSchoolBus ? 240 : 180;
   const vh = isSchoolBus ? 80 : 64;
-  // 10% chance of ladder-extended firetruck on level 2+
-  const ladderUp = (type === 'firetruck' && level >= 2 && Math.random() < 0.1);
+  // 10% chance of ladder-extended firetruck on level 2+, or forced
+  const ladderUp = forceLadder || (type === 'firetruck' && level >= 2 && Math.random() < 0.1);
   vehicles.push({
     x: W + offscreenDist,
     dir: -1, // always from right
@@ -1480,6 +1480,10 @@ function update() {
   // 3) More frequent random spawns in second half, biased from right
   if (level === 1 && levelTimer === 60) {
     spawnVehicle('schoolbus');
+  }
+  // Guaranteed ladder truck early in level 2
+  if (level === 2 && levelTimer === 90) {
+    spawnVehicle('firetruck', true);
   }
   const thirdMark = Math.floor(levelDuration / 3);
   if (levelTimer === thirdMark) {
@@ -3045,18 +3049,20 @@ function drawMenu() {
   const dissolve = menuScrollY <= 0 ? 0 : Math.min(1, menuScrollY / 250);
 
   // Draw the city background — fades to black as legend scrolls
+  // Always start with the solid dark base to prevent flicker
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
   if (dissolve < 1) {
+    ctx.globalAlpha = 1 - dissolve;
     drawNeoTokyoSky();
     drawBuildingLayer(buildings_far, 0.05, 0);
     drawBuildingLayer(buildings_mid, 0.15, 0.3);
     drawNeonSigns();
     drawBuildingLayer(buildings_near, 0.3, 0.1);
     drawStreet();
-    // Darken overlay — gets darker as dissolve increases
-    ctx.fillStyle = `rgba(0,0,0,${0.6 + dissolve * 0.4})`;
-    ctx.fillRect(0, 0, W, H);
-  } else {
-    ctx.fillStyle = '#0a0a1a';
+    // Darken overlay on top of city
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = `rgba(0,0,0,${0.6})`;
     ctx.fillRect(0, 0, W, H);
   }
 
