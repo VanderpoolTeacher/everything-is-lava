@@ -32,6 +32,21 @@ const H = canvas.height = Math.min(550, window.innerHeight - 20);
 
 // ── CONSTANTS ──
 const GAME_FONT = "'Press Start 2P', monospace";
+// Pre-computed font strings to avoid template literal allocation each frame
+const FONT_7B = `bold 7px ${GAME_FONT}`;
+const FONT_10 = `10px ${GAME_FONT}`;
+const FONT_12 = `12px ${GAME_FONT}`;
+const FONT_12B = `bold 12px ${GAME_FONT}`;
+const FONT_13B = `bold 13px ${GAME_FONT}`;
+const FONT_14B = `bold 14px ${GAME_FONT}`;
+const FONT_16 = `16px ${GAME_FONT}`;
+const FONT_16B = `bold 16px ${GAME_FONT}`;
+const FONT_18B = `bold 18px ${GAME_FONT}`;
+const FONT_20B = `bold 20px ${GAME_FONT}`;
+const FONT_24B = `bold 24px ${GAME_FONT}`;
+const FONT_36B = `bold 36px ${GAME_FONT}`;
+const FONT_42B = `bold 42px ${GAME_FONT}`;
+const MAX_PARTICLES = 150;
 const GRAVITY = 0.55;
 const JUMP_FORCE = -11.5;
 const GROUND_Y = H - 60; // street level
@@ -77,6 +92,21 @@ const titleImg = new Image();
 titleImg.src = 'assets/everything-is-lava-title.png';
 let titleReady = false;
 titleImg.onload = function() { titleReady = true; };
+
+// ── MASTER VOLUME ──
+let masterVolume = 1.0;
+let muted = false;
+let volumeDisplayTimer = 0;
+
+function applyMasterVolume() {
+  const v = muted ? 0 : masterVolume;
+  levelMusic.volume = 0.5 * v;
+  dojoTracks.forEach(t => { t.volume = 0.4 * v; });
+  titleMusic.volume = 0.4 * v;
+  gameOverMusic.volume = 0.6 * v;
+  victoryMusic.volume = 0.6 * v;
+  // Web Audio nodes scale via their own gain limits * masterVolume handled in update functions
+}
 
 // ── MUSIC ──
 const levelMusic = new Audio('assets/music/neo-tokyo-level-1.mp3');
@@ -130,7 +160,7 @@ function updateSiren(volume, time) {
   if (!sirenOsc) return;
   const t = time || performance.now() / 1000;
   sirenOsc.frequency.value = 750 + Math.sin(t * 8) * 150;
-  sirenGain.gain.value = Math.min(0.25, volume);
+  sirenGain.gain.value = Math.min(0.17, volume) * (muted ? 0 : masterVolume);
 }
 function stopSiren() {
   if (sirenOsc) {
@@ -180,7 +210,7 @@ function updatePoliceSiren(volume) {
   const hiLo = Math.sin(t * 18) > 0 ? 960 : 660;
   policeOsc1.frequency.value = hiLo;
   policeOsc2.frequency.value = hiLo + 12;
-  policeGain.gain.value = Math.min(0.2, volume);
+  policeGain.gain.value = Math.min(0.14, volume) * (muted ? 0 : masterVolume);
 }
 function stopPoliceSiren() {
   if (policeOsc1) { policeOsc1.stop(); policeOsc1.disconnect(); policeOsc1 = null; }
@@ -271,7 +301,7 @@ function updateBusScream(volume) {
   if (!busScreamNodes) return;
   const t = performance.now();
   const n = busScreamNodes;
-  n.masterGain.gain.value = Math.min(0.5, volume * 0.9);
+  n.masterGain.gain.value = Math.min(0.35, volume * 0.65) * (muted ? 0 : masterVolume);
 
   // High yell — pitch jumps erratically like a kid screaming
   const hiPitch = 620 + Math.sin(t / 120) * 80 + (Math.sin(t / 31) > 0.5 ? 150 : 0);
@@ -369,7 +399,7 @@ function startBuzz() {
   buzzOsc.start();
 }
 function updateBuzz(volume) {
-  if (buzzGain) buzzGain.gain.value = Math.min(0.03, volume);
+  if (buzzGain) buzzGain.gain.value = Math.min(0.02, volume) * (muted ? 0 : masterVolume);
 }
 function stopBuzz() {
   if (buzzOsc) { buzzOsc.stop(); buzzOsc.disconnect(); buzzOsc = null; buzzGain = null; }
@@ -921,6 +951,7 @@ function updateVehicleDebris() {
 
 function drawVehicleDebris() {
   for (const d of vehicleDebris) {
+    if (d.x < -50 || d.x > W + 50 || d.y < -50 || d.y > H + 50) continue;
     const alpha = Math.min(1, d.life / 30);
     ctx.globalAlpha = alpha;
     ctx.save();
@@ -947,6 +978,27 @@ let konamiIndex = 0;
 
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
+
+  // Volume controls: M = mute, +/- = adjust
+  if (e.code === 'KeyM') {
+    muted = !muted;
+    applyMasterVolume();
+    volumeDisplayTimer = 90;
+    return;
+  }
+  if (e.code === 'Equal' || e.code === 'NumpadAdd') {
+    masterVolume = Math.min(1.0, Math.round((masterVolume + 0.1) * 10) / 10);
+    muted = false;
+    applyMasterVolume();
+    volumeDisplayTimer = 90;
+    return;
+  }
+  if (e.code === 'Minus' || e.code === 'NumpadSubtract') {
+    masterVolume = Math.max(0, Math.round((masterVolume - 0.1) * 10) / 10);
+    applyMasterVolume();
+    volumeDisplayTimer = 90;
+    return;
+  }
 
   // Konami code detection
   if (e.code === KONAMI_SEQ[konamiIndex]) {
@@ -2082,8 +2134,10 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
     let bx = ((b.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
     // Snap to pixel grid
     bx = Math.round(bx / PX) * PX;
-    const by = Math.round((GROUND_Y - b.h) / PX) * PX;
     const bw = Math.round(b.w / PX) * PX;
+    // Skip offscreen buildings
+    if (bx + bw < -10 || bx > W + 10) return;
+    const by = Math.round((GROUND_Y - b.h) / PX) * PX;
     const bh = GROUND_Y - by;
 
     // Parse base color for variations
@@ -2116,25 +2170,24 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
     const winH = PX * 2;
     const winMargin = PX * 2;
 
+    // Pre-compute window colors once per building (not per window)
+    const winColors = [
+      `rgba(255,220,80,${(0.5 + brightness * 0.4).toFixed(2)})`,
+      `rgba(80,220,255,${(0.4 + brightness * 0.4).toFixed(2)})`,
+      `rgba(255,150,50,${(0.4 + brightness * 0.3).toFixed(2)})`,
+      `rgba(200,200,255,${(0.3 + brightness * 0.3).toFixed(2)})`,
+      `rgba(255,80,180,${(0.3 + brightness * 0.3).toFixed(2)})`,
+    ];
+    const darkWin = 'rgba(0,0,0,0.2)';
+
     for (let wy = by + winMargin; wy + winH < GROUND_Y - winMargin; wy += winSpacingY) {
       for (let wx = bx + winMargin; wx + winW < bx + bw - winMargin; wx += winSpacingX) {
-        // Deterministic on/off based on position (no flickering randomness)
         const hash = ((wx * 7 + wy * 13) & 0xFF);
-        const lit = hash > 80;
-        if (lit) {
-          // Warm window colors — mix of yellow, cyan, orange, white
-          const winColors = [
-            `rgba(255, 220, 80, ${0.5 + brightness * 0.4})`,   // warm yellow
-            `rgba(80, 220, 255, ${0.4 + brightness * 0.4})`,    // cyan
-            `rgba(255, 150, 50, ${0.4 + brightness * 0.3})`,    // orange
-            `rgba(200, 200, 255, ${0.3 + brightness * 0.3})`,   // cool white
-            `rgba(255, 80, 180, ${0.3 + brightness * 0.3})`,    // pink neon
-          ];
-          ctx.fillStyle = winColors[hash % winColors.length];
+        if (hash > 80) {
+          ctx.fillStyle = winColors[hash % 5];
           ctx.fillRect(wx, wy, winW, winH);
         } else {
-          // Dark window
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+          ctx.fillStyle = darkWin;
           ctx.fillRect(wx, wy, winW, winH);
         }
       }
@@ -2163,36 +2216,47 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
 
 function drawNeonSigns() {
   const offset = (scrollOffset * 0.3) % (W + 500);
+  // First pass: draw glow rects with shadow enabled (batched)
+  ctx.shadowBlur = 15;
   neonSigns.forEach(s => {
     const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
+    if (sx < -100 || sx > W + 100) return;
     const intensity = Math.sin(s.blink) * 0.3 + 0.7;
-    const flicker = Math.random() > 0.98 ? 0.3 : 1;
-
+    const flicker = (frameCount + (s.x | 0)) % 50 === 0 ? 0.3 : 1; // deterministic flicker
     ctx.globalAlpha = intensity * flicker;
-
-    // Neon glow
     ctx.shadowColor = s.color;
-    ctx.shadowBlur = 15;
     ctx.fillStyle = s.color;
     ctx.fillRect(sx, s.y, s.w, s.h);
-
-    // Brighter center
-    ctx.fillStyle = '#ffffff';
-    ctx.globalAlpha = intensity * flicker * 0.4;
-    ctx.fillRect(sx + 2, s.y + 2, s.w - 4, s.h - 4);
-
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
   });
+  ctx.shadowBlur = 0;
+  // Second pass: bright centers (no shadow needed)
+  neonSigns.forEach(s => {
+    const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
+    if (sx < -100 || sx > W + 100) return;
+    const intensity = Math.sin(s.blink) * 0.3 + 0.7;
+    const flicker = (frameCount + (s.x | 0)) % 50 === 0 ? 0.3 : 1;
+    ctx.globalAlpha = intensity * flicker * 0.4;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(sx + 2, s.y + 2, s.w - 4, s.h - 4);
+  });
+  ctx.globalAlpha = 1;
+}
+
+// Cache street gradient (doesn't change)
+let cachedRoadGradient = null;
+function getStreetGradient() {
+  if (!cachedRoadGradient) {
+    cachedRoadGradient = ctx.createLinearGradient(0, GROUND_Y, 0, H);
+    cachedRoadGradient.addColorStop(0, '#1a1a22');
+    cachedRoadGradient.addColorStop(0.3, '#141418');
+    cachedRoadGradient.addColorStop(1, '#0e0e12');
+  }
+  return cachedRoadGradient;
 }
 
 function drawStreet() {
   // Asphalt base
-  const road = ctx.createLinearGradient(0, GROUND_Y, 0, H);
-  road.addColorStop(0, '#1a1a22');
-  road.addColorStop(0.3, '#141418');
-  road.addColorStop(1, '#0e0e12');
-  ctx.fillStyle = road;
+  ctx.fillStyle = getStreetGradient();
   ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
 
   const so = scrollOffset; // shorthand
@@ -2399,7 +2463,7 @@ function drawLavaPools() {
     }
 
     // ── Ember particles (square pixels rising) ──
-    if (Math.random() < 0.15 * alpha) {
+    if (particles.length < MAX_PARTICLES && Math.random() < 0.15 * alpha) {
       // Favor embers from the deeper center area
       const emCol = Math.floor(taperCols + Math.random() * (totalCols - taperCols * 2));
       const emX = lx + emCol * P;
@@ -2770,13 +2834,12 @@ function drawStreetLamps() {
       flicker = 0.7 + Math.sin(frameCount * 0.06 + lamp.flickerPhase) * 0.3;
     }
 
-    // ── Lamp glow on ground (circle of light) ──
-    ctx.globalAlpha = 0.08 * flicker;
-    const groundGlow = ctx.createRadialGradient(sx, baseY, 2, sx, baseY, 50);
-    groundGlow.addColorStop(0, lamp.glowColor);
-    groundGlow.addColorStop(1, 'transparent');
-    ctx.fillStyle = groundGlow;
-    ctx.fillRect(sx - 50, baseY - 20, 100, 40);
+    // ── Lamp glow on ground (simple rect, cheaper than radialGradient) ──
+    ctx.globalAlpha = 0.06 * flicker;
+    ctx.fillStyle = lamp.glowColor;
+    ctx.fillRect(sx - 35, baseY - 10, 70, 20);
+    ctx.globalAlpha = 0.03 * flicker;
+    ctx.fillRect(sx - 50, baseY - 18, 100, 36);
     ctx.globalAlpha = 1;
 
     // ── Pole (pixel art — 2 pixels wide) ──
@@ -3966,15 +4029,16 @@ function draw() {
     drawVehicleDebris();
     drawPlayer();
 
-    // Particles
-    particles.forEach(p => {
+    // Particles — use fillRect instead of arc for performance
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      if (p.x < -10 || p.x > W + 10 || p.y < -10 || p.y > H + 10) continue;
       const alpha = p.life / p.maxLife;
+      const sz = p.size * alpha;
       ctx.globalAlpha = alpha;
       ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
-      ctx.fill();
-    });
+      ctx.fillRect(p.x - sz * 0.5, p.y - sz * 0.5, sz, sz);
+    }
     ctx.globalAlpha = 1;
 
     drawHUD();
@@ -3986,6 +4050,31 @@ function draw() {
   }
 
   ctx.restore();
+
+  // Volume indicator (shows briefly when adjusted)
+  if (volumeDisplayTimer > 0) {
+    volumeDisplayTimer--;
+    const vAlpha = Math.min(1, volumeDisplayTimer / 30);
+    ctx.globalAlpha = vAlpha * 0.8;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(W - 120, 10, 110, 28);
+    ctx.globalAlpha = vAlpha;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `12px ${GAME_FONT}`;
+    ctx.textAlign = 'left';
+    if (muted) {
+      ctx.fillText('MUTED', W - 112, 29);
+    } else {
+      ctx.fillText('VOL', W - 112, 29);
+      // Volume bar
+      ctx.fillStyle = '#333333';
+      ctx.fillRect(W - 80, 19, 60, 8);
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillRect(W - 80, 19, 60 * masterVolume, 8);
+    }
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = 1;
+  }
 }
 
 // ── GAME LOOP ──
