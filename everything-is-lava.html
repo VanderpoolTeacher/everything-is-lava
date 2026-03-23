@@ -3048,23 +3048,17 @@ function drawMenu() {
   // Dissolve factor: 0 during pause, ramps to 1 slowly as scroll starts
   const dissolve = menuScrollY <= 0 ? 0 : Math.min(1, menuScrollY / 250);
 
-  // Draw the city background — fades to black as legend scrolls
-  // Always start with the solid dark base to prevent flicker
-  ctx.fillStyle = '#0a0a1a';
+  // Draw the city background — fades smoothly to dark as legend scrolls
+  drawNeoTokyoSky();
+  drawBuildingLayer(buildings_far, 0.05, 0);
+  drawBuildingLayer(buildings_mid, 0.15, 0.3);
+  drawNeonSigns();
+  drawBuildingLayer(buildings_near, 0.3, 0.1);
+  drawStreet();
+  // Single dark overlay that gets more opaque as dissolve increases
+  // Starts at 0.6 (moody city), ends at 1.0 (fully dark)
+  ctx.fillStyle = `rgba(10,10,26,${0.6 + dissolve * 0.4})`;
   ctx.fillRect(0, 0, W, H);
-  if (dissolve < 1) {
-    ctx.globalAlpha = 1 - dissolve;
-    drawNeoTokyoSky();
-    drawBuildingLayer(buildings_far, 0.05, 0);
-    drawBuildingLayer(buildings_mid, 0.15, 0.3);
-    drawNeonSigns();
-    drawBuildingLayer(buildings_near, 0.3, 0.1);
-    drawStreet();
-    // Darken overlay on top of city
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = `rgba(0,0,0,${0.6})`;
-    ctx.fillRect(0, 0, W, H);
-  }
 
   ctx.textAlign = 'center';
 
@@ -3072,24 +3066,33 @@ function drawMenu() {
   const titleAlpha = Math.max(0, 1 - dissolve * 1.2);
   if (titleAlpha > 0.01) {
     ctx.globalAlpha = titleAlpha;
+    // Slow zoom: starts at 1.0, grows ~15% over the full title display
+    const zoomTime = menuScrollY + 480; // 0 at start, increases over time
+    const titleScale = 1 + Math.min(0.15, zoomTime * 0.0002);
     if (titleReady) {
       const maxW = W * 0.85;
       const aspect = titleImg.height / titleImg.width;
-      const drawW = Math.min(maxW, titleImg.width);
-      const drawH = drawW * aspect;
+      const baseW = Math.min(maxW, titleImg.width);
+      const baseH = baseW * aspect;
+      const drawW = baseW * titleScale;
+      const drawH = baseH * titleScale;
       const titleX = (W - drawW) / 2;
       const titleY = H / 2 - drawH / 2 - 40;
       ctx.drawImage(titleImg, titleX, titleY, drawW, drawH);
     } else {
+      ctx.save();
+      ctx.translate(W / 2, H / 2 - 35);
+      ctx.scale(titleScale, titleScale);
       ctx.shadowColor = '#ff4400';
       ctx.shadowBlur = 40;
       ctx.fillStyle = '#ff6600';
       ctx.font = `bold 36px ${GAME_FONT}`;
-      ctx.fillText('EVERYTHING', W / 2, H / 2 - 65);
+      ctx.fillText('EVERYTHING', 0, -30);
       ctx.fillStyle = '#ffcc00';
       ctx.font = `bold 42px ${GAME_FONT}`;
-      ctx.fillText('IS LAVA', W / 2, H / 2 - 5);
+      ctx.fillText('IS LAVA', 0, 30);
       ctx.shadowBlur = 0;
+      ctx.restore();
     }
 
     const pulse = Math.sin(frameCount * 0.05) * 0.3 + 0.7;
