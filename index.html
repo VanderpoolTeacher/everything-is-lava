@@ -34,7 +34,9 @@ const H = canvas.height = Math.min(550, window.innerHeight - 20);
 const GAME_FONT = "'Press Start 2P', monospace";
 // Pre-computed font strings to avoid template literal allocation each frame
 const FONT_7B = `bold 7px ${GAME_FONT}`;
+const FONT_8B = `bold 8px ${GAME_FONT}`;
 const FONT_10 = `10px ${GAME_FONT}`;
+const FONT_10B = `bold 10px ${GAME_FONT}`;
 const FONT_12 = `12px ${GAME_FONT}`;
 const FONT_12B = `bold 12px ${GAME_FONT}`;
 const FONT_13B = `bold 13px ${GAME_FONT}`;
@@ -44,6 +46,7 @@ const FONT_16B = `bold 16px ${GAME_FONT}`;
 const FONT_18B = `bold 18px ${GAME_FONT}`;
 const FONT_20B = `bold 20px ${GAME_FONT}`;
 const FONT_24B = `bold 24px ${GAME_FONT}`;
+const FONT_28B = `bold 28px ${GAME_FONT}`;
 const FONT_36B = `bold 36px ${GAME_FONT}`;
 const FONT_42B = `bold 42px ${GAME_FONT}`;
 const MAX_PARTICLES = 150;
@@ -73,6 +76,7 @@ let levelDuration = 1800; // frames (~30 seconds at 60fps)
 let shakeTimer = 0;
 let flashTimer = 0;
 let scrollOffset = 0;
+let villageProgress = 0; // 0 = city, 1 = full village (level 3 ending)
 let gameOverScrollDone = false;
 let deathTimer = 0; // frames since death, used for animation + restart delay
 const DEATH_RESTART_DELAY = 180; // ~3 seconds at 60fps
@@ -94,7 +98,7 @@ let titleReady = false;
 titleImg.onload = function() { titleReady = true; };
 
 // ── MASTER VOLUME ──
-let masterVolume = 1.0;
+let masterVolume = 0.5;
 let muted = false;
 let volumeDisplayTimer = 0;
 
@@ -107,6 +111,7 @@ function applyMasterVolume() {
   victoryMusic.volume = 0.6 * v;
   // Web Audio nodes scale via their own gain limits * masterVolume handled in update functions
 }
+// applyMasterVolume() called after audio elements are created below
 
 // ── MUSIC ──
 const levelMusic = new Audio('assets/music/neo-tokyo-level-1.mp3');
@@ -133,6 +138,8 @@ gameOverMusic.volume = 0.6;
 const victoryMusic = new Audio('assets/music/congratulations-01.mp3');
 victoryMusic.loop = false;
 victoryMusic.volume = 0.6;
+
+applyMasterVolume(); // apply initial 50% volume
 
 // ── SOUND EFFECTS (Web Audio API) ──
 let audioCtx = null;
@@ -1021,6 +1028,7 @@ window.addEventListener('keydown', e => {
       victoryLifeBonus = 0;
       gameState = 'victory';
       victoryScrollDone = false;
+      victoryLegendCache = buildVictoryLegend();
       deathTimer = 0;
       victoryMusic.currentTime = 0;
       victoryMusic.play().catch(() => {});
@@ -1098,13 +1106,7 @@ window.addEventListener('keydown', e => {
     getDojoMusic().play().catch(() => {});
   }
 
-  // Kick: press forward arrow while grounded (playing or dojo)
-  if ((gameState === 'playing' || gameState === 'dojo') && (e.code === 'ArrowRight' || e.code === 'KeyD' || e.code === 'ArrowLeft' || e.code === 'KeyA')) {
-    if (player.grounded && !player.kicking) {
-      player.kicking = true;
-      player.kickTimer = 0;
-    }
-  }
+  // Kick removed from arrow/movement keys
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -1163,6 +1165,7 @@ function clearGameState() {
   creditsTimer = 0;
   scrollOffset = 0;
   frameCount = 0;
+  villageProgress = 0;
   stopSiren();
   stopPoliceSiren();
   stopBusScream();
@@ -1220,6 +1223,7 @@ function startGame() {
   levelTimer = 0;
   scrollOffset = 0;
   deathTimer = 0;
+  villageProgress = 0;
   player.x = 150;
   player.y = GROUND_Y - SPRITE_H;
   player.vy = 0;
@@ -1236,6 +1240,7 @@ function startGame() {
   player.kickTimer = 0;
   player.facingRight = true;
   player.idleTimer = 0;
+  player.invincible = 0;
   lavaDrops = [];
   lavaPools = [];
   particles = [];
@@ -1267,6 +1272,7 @@ function respawnPlayer() {
   player.kickTimer = 0;
   player.facingRight = true;
   player.idleTimer = 0;
+  player.invincible = 120; // ~2 seconds of invincibility
   // Clear immediate threats near player
   lavaDrops = [];
   warningMarkers = [];
@@ -1282,6 +1288,15 @@ function update() {
   frameCount++;
   levelTimer++;
   scrollOffset += RUN_SPEED;
+  if (player.invincible > 0) player.invincible--;
+
+  // Village transition — last 600 frames (~10 seconds) of level 3
+  const VILLAGE_LEAD_IN = 600;
+  if (level >= 3 && levelTimer > levelDuration - VILLAGE_LEAD_IN) {
+    villageProgress = Math.min(1, (levelTimer - (levelDuration - VILLAGE_LEAD_IN)) / VILLAGE_LEAD_IN);
+  } else {
+    villageProgress = 0;
+  }
 
   // Level complete?
   if (levelTimer >= levelDuration) {
@@ -1302,6 +1317,7 @@ function update() {
       // Beat the game!
       gameState = 'victory';
       victoryScrollDone = false;
+      victoryLegendCache = buildVictoryLegend();
       deathTimer = 0;
       victoryMusic.currentTime = 0;
       victoryMusic.play().catch(() => {});
@@ -1317,8 +1333,10 @@ function update() {
   score = Math.floor(levelTimer / 3) + (level - 1) * 1000;
 
   // Spawn lava drops - rate increases with level and time
+  // Taper off during village transition (lava stops near the village)
   const dropRate = Math.max(15, 60 - level * 8 - levelTimer * 0.005);
-  if (frameCount % Math.floor(dropRate) === 0) {
+  const lavaChance = villageProgress > 0.5 ? Math.max(0, 1 - (villageProgress - 0.5) * 2) : 1;
+  if (frameCount % Math.floor(dropRate) === 0 && Math.random() < lavaChance) {
     spawnLavaDrop();
   }
 
@@ -1430,6 +1448,46 @@ function update() {
       player.grounded = true;
       player.jumping = false;
       player.doubleJumped = false;
+    }
+  }
+
+  // Firetruck ladder platform collision (extended ladder trucks only)
+  for (const v of vehicles) {
+    if (!v.ladderExtended) continue;
+    // Ladder geometry matches draw code: base at vehicle-local (bx+10, by-1)*P, angle -1.1 rad, length 18*P
+    const VP = 8; // vehicle pixel size
+    const bw = 22, bh = 7;
+    const bx = -bw / 2, by = -bh / 2 - 1;
+    const ladderBaseX = v.x + v.w / 2 + (bx + 10) * VP;
+    const ladderBaseY = v.y + v.h / 2 + (by - 1) * VP;
+    const ladderAngle = -1.1;
+    const ladderLen = 18 * VP; // 144px
+    const cosA = Math.cos(ladderAngle);
+    const sinA = Math.sin(ladderAngle);
+
+    // Check several points along the ladder as mini-platforms
+    for (let t = 0.15; t <= 1.0; t += 0.1) {
+      const px = ladderBaseX + cosA * ladderLen * t;
+      const py = ladderBaseY + sinA * ladderLen * t;
+      const platW = 16; // hitbox width at each sample point
+      const platH = 8;  // hitbox thickness
+
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > px - platW / 2 &&
+        player.x < px + platW / 2 &&
+        player.y + player.h >= py - platH / 2 &&
+        player.y + player.h <= py + platH / 2 + player.vy + 4
+      ) {
+        player.y = py - platH / 2 - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+        // Move player with the truck
+        player.x += v.speed * v.dir;
+        break;
+      }
     }
   }
 
@@ -1551,7 +1609,7 @@ function update() {
   }
 
   // Update neon sign blinking
-  neonSigns.forEach(s => { s.blink += s.blinkSpeed; });
+  for (let si = 0; si < neonSigns.length; si++) neonSigns[si].blink += neonSigns[si].blinkSpeed;
 
   // Spawn emergency vehicles:
   // 0) Level 1: school bus right away — sets the tone
@@ -1572,7 +1630,7 @@ function update() {
   if (levelTimer === thirdMark + 60) {
     spawnVehicle(); // follow-up emergency vehicle
   }
-  if (levelTimer > levelDuration / 2 && Math.random() < 0.006 + level * 0.0015) {
+  if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
     spawnVehicle();
   }
 
@@ -1741,6 +1799,7 @@ let deathAnimVY = 0, deathAnimSpin = 0;
 let deathAnimActive = false;
 
 function die() {
+  if (player.invincible > 0) return; // invincibility frames active
   lives--;
   player.alive = false;
   stopSiren();
@@ -2158,13 +2217,33 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
   const PX = 4; // pixel size for 32-bit look — everything snaps to this grid
   const offset = (scrollOffset * parallaxSpeed) % (W + 500);
 
-  buildings.forEach(b => {
+  // Pre-compute window colors per layer (depends only on brightness, not per-building)
+  const a1 = (0.5 + brightness * 0.4).toFixed(2);
+  const a2 = (0.4 + brightness * 0.4).toFixed(2);
+  const a3 = (0.4 + brightness * 0.3).toFixed(2);
+  const a4 = (0.3 + brightness * 0.3).toFixed(2);
+  const layerWinColors = [
+    'rgba(255,220,80,' + a1 + ')',
+    'rgba(80,220,255,' + a2 + ')',
+    'rgba(255,150,50,' + a3 + ')',
+    'rgba(200,200,255,' + a4 + ')',
+    'rgba(255,80,180,' + a4 + ')',
+  ];
+
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
     let bx = ((b.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
     // Snap to pixel grid
     bx = Math.round(bx / PX) * PX;
     const bw = Math.round(b.w / PX) * PX;
     // Skip offscreen buildings
-    if (bx + bw < -10 || bx > W + 10) return;
+    if (bx + bw < -10 || bx > W + 10) continue;
+    // Thin out buildings during village transition — progressively skip more
+    if (villageProgress > 0.2) {
+      const skipChance = (villageProgress - 0.2) * 1.25; // 0 to 1
+      const hash = ((bi * 37 + (b.x | 0) * 13) & 0xFF) / 255;
+      if (hash < skipChance) continue;
+    }
     const by = Math.round((GROUND_Y - b.h) / PX) * PX;
     const bh = GROUND_Y - by;
 
@@ -2198,25 +2277,21 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
     const winH = PX * 2;
     const winMargin = PX * 2;
 
-    // Pre-compute window colors once per building (not per window)
-    const winColors = [
-      `rgba(255,220,80,${(0.5 + brightness * 0.4).toFixed(2)})`,
-      `rgba(80,220,255,${(0.4 + brightness * 0.4).toFixed(2)})`,
-      `rgba(255,150,50,${(0.4 + brightness * 0.3).toFixed(2)})`,
-      `rgba(200,200,255,${(0.3 + brightness * 0.3).toFixed(2)})`,
-      `rgba(255,80,180,${(0.3 + brightness * 0.3).toFixed(2)})`,
-    ];
+    // Use layer-level pre-computed window colors (avoids per-building allocation)
+    const winColors = layerWinColors;
     const darkWin = 'rgba(0,0,0,0.2)';
 
+    // Use building-local coords for hash so windows don't flicker during scroll
+    let winRow = 0;
     for (let wy = by + winMargin; wy + winH < GROUND_Y - winMargin; wy += winSpacingY) {
+      let winCol = 0;
       for (let wx = bx + winMargin; wx + winW < bx + bw - winMargin; wx += winSpacingX) {
-        const hash = ((wx * 7 + wy * 13) & 0xFF);
+        // Hash based on local grid position + building's original X (stable)
+        const hash = ((winCol * 7 + winRow * 13 + (b.x | 0) * 3) & 0xFF);
         if (hash > 80) {
-          // ~5% of lit windows flicker (determined by hash)
-          if ((hash & 0x1F) === 0) {
-            // Flickering window — blinks on/off based on frameCount
-            const flickerSpeed = 0.07 + (hash & 0x07) * 0.02;
-            const on = Math.sin(frameCount * flickerSpeed + hash) > -0.2;
+          // Only ~2% of lit windows flicker — very rare
+          if (hash === 81 || hash === 133 || hash === 200 || hash === 244) {
+            const on = Math.sin(frameCount * 0.02 + hash * 3) > -0.6;
             ctx.fillStyle = on ? winColors[hash % 5] : darkWin;
           } else {
             ctx.fillStyle = winColors[hash % 5];
@@ -2226,7 +2301,9 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
           ctx.fillStyle = darkWin;
           ctx.fillRect(wx, wy, winW, winH);
         }
+        winCol++;
       }
+      winRow++;
     }
 
     // Roof details — antenna, AC units, pixelated
@@ -2235,8 +2312,10 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
       ctx.fillStyle = `rgba(80, 90, 110, ${0.5 + brightness * 0.3})`;
       const antX = bx + Math.round(bw / 2 / PX) * PX;
       ctx.fillRect(antX - PX, by - PX * 4, PX * 2, PX * 4);
-      // Blinking light on antenna
-      const blink = Math.sin(frameCount * 0.08 + bx) > 0.5;
+      // Blinking light on antenna — slow, randomized per building
+      const blinkPhase = (b.x | 0) * 1.7 + (b.h | 0) * 0.3; // unique per building
+      const blinkSpeed = 0.015 + ((b.x * 7 | 0) % 10) * 0.003; // 0.015–0.042, varies
+      const blink = Math.sin(frameCount * blinkSpeed + blinkPhase) > 0.3;
       ctx.fillStyle = blink ? '#ff3344' : '#441111';
       ctx.fillRect(antX - PX, by - PX * 5, PX * 2, PX);
 
@@ -2247,34 +2326,36 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
         ctx.fillRect(bx + bw - PX * 5, by - PX * 2, PX * 3, PX * 2);
       }
     }
-  });
+  }
 }
 
 function drawNeonSigns() {
   const offset = (scrollOffset * 0.3) % (W + 500);
   // First pass: draw glow rects with shadow enabled (batched)
   ctx.shadowBlur = 15;
-  neonSigns.forEach(s => {
+  for (let si = 0; si < neonSigns.length; si++) {
+    const s = neonSigns[si];
     const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
-    if (sx < -100 || sx > W + 100) return;
+    if (sx < -100 || sx > W + 100) continue;
     const intensity = Math.sin(s.blink) * 0.3 + 0.7;
-    const flicker = (frameCount + (s.x | 0)) % 50 === 0 ? 0.3 : 1; // deterministic flicker
+    const flicker = (frameCount + (s.x | 0)) % 50 === 0 ? 0.3 : 1;
     ctx.globalAlpha = intensity * flicker;
     ctx.shadowColor = s.color;
     ctx.fillStyle = s.color;
     ctx.fillRect(sx, s.y, s.w, s.h);
-  });
+  }
   ctx.shadowBlur = 0;
   // Second pass: bright centers (no shadow needed)
-  neonSigns.forEach(s => {
+  for (let si = 0; si < neonSigns.length; si++) {
+    const s = neonSigns[si];
     const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
-    if (sx < -100 || sx > W + 100) return;
+    if (sx < -100 || sx > W + 100) continue;
     const intensity = Math.sin(s.blink) * 0.3 + 0.7;
     const flicker = (frameCount + (s.x | 0)) % 50 === 0 ? 0.3 : 1;
     ctx.globalAlpha = intensity * flicker * 0.4;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(sx + 2, s.y + 2, s.w - 4, s.h - 4);
-  });
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -2378,24 +2459,28 @@ function drawStreet() {
   ctx.fillRect(0, GROUND_Y + 6, W, H - GROUND_Y - 6);
 
   // Neon light reflections on wet road (colored streaks)
-  neonSigns.forEach(s => {
-    const offset = (scrollOffset * 0.3) % (W + 500);
-    const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
-    if (sx > -50 && sx < W + 50) {
-      ctx.globalAlpha = 0.04;
-      ctx.fillStyle = s.color;
-      ctx.fillRect(sx - 5, GROUND_Y + 6, s.w + 10, H - GROUND_Y - 6);
-      ctx.globalAlpha = 1;
+  {
+    const neonOff = (scrollOffset * 0.3) % (W + 500);
+    for (let si = 0; si < neonSigns.length; si++) {
+      const s = neonSigns[si];
+      const sx = ((s.x - neonOff) % (W + 500) + W + 500) % (W + 500) - 100;
+      if (sx > -50 && sx < W + 50) {
+        ctx.globalAlpha = 0.04;
+        ctx.fillStyle = s.color;
+        ctx.fillRect(sx - 5, GROUND_Y + 6, s.w + 10, H - GROUND_Y - 6);
+        ctx.globalAlpha = 1;
+      }
     }
-  });
+  }
 }
 
 function drawLavaPools() {
   const P = 4; // pixel grid for 32-bit look
 
-  lavaPools.forEach(p => {
+  for (let pi = 0; pi < lavaPools.length; pi++) {
+    const p = lavaPools[pi];
     const screenX = p.worldX - scrollOffset;
-    if (screenX + p.w < -50 || screenX - p.w > W + 50) return;
+    if (screenX + p.w < -50 || screenX - p.w > W + 50) continue;
 
     const fadeIn = Math.min(1, (p.maxLife - p.life) / 30);
     const fadeOut = Math.min(1, p.life / 60);
@@ -2433,7 +2518,7 @@ function drawLavaPools() {
 
     // ── Main pool body (tapered rows of chunky pixels) ──
     ctx.globalAlpha = alpha;
-    const lavaColors = ['#ff6600', '#ff4400', '#ee2200', '#cc1100', '#ffaa00', '#ff8800'];
+    const lavaColors = LAVA_COLORS;
 
     for (let col = 0; col < totalCols; col++) {
       const colX = lx + col * P;
@@ -2516,14 +2601,15 @@ function drawLavaPools() {
     }
 
     ctx.globalAlpha = 1;
-  });
+  }
 }
 
 function drawLavaDrops() {
   // Warning markers (world coords)
-  warningMarkers.forEach(w => {
+  for (let wi = 0; wi < warningMarkers.length; wi++) {
+    const w = warningMarkers[wi];
     const sx = w.worldX - scrollOffset;
-    if (sx < -30 || sx > W + 30) return;
+    if (sx < -30 || sx > W + 30) continue;
 
     const pulse = Math.sin(w.life * 0.3) * 0.3 + 0.5;
     const alpha = (w.life / w.maxLife) * pulse;
@@ -2539,17 +2625,18 @@ function drawLavaDrops() {
 
     // Exclamation
     ctx.fillStyle = '#ff3300';
-    ctx.font = `bold 8px ${GAME_FONT}`;
+    ctx.font = FONT_8B;
     ctx.textAlign = 'center';
     ctx.fillText('!', sx, GROUND_Y - 8);
 
     ctx.globalAlpha = 1;
-  });
+  }
 
   // Actual drops (world coords)
-  lavaDrops.forEach(d => {
+  for (let di = 0; di < lavaDrops.length; di++) {
+    const d = lavaDrops[di];
     const sx = d.worldX - scrollOffset;
-    if (sx < -40 || sx > W + 40) return;
+    if (sx < -40 || sx > W + 40) continue;
 
     // Flash effect — rapid bright/dim cycle as drop falls
     const flash = Math.sin(frameCount * 0.6 + d.worldX * 0.1) * 0.4 + 0.6;
@@ -2595,13 +2682,14 @@ function drawLavaDrops() {
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-  });
+  }
 }
 
 function drawVehicles() {
   const P = 8; // doubled pixel size for bigger vehicles
 
-  vehicles.forEach(v => {
+  for (let vi = 0; vi < vehicles.length; vi++) {
+    const v = vehicles[vi];
     const facing = v.dir;
     ctx.save();
     ctx.translate(v.x + v.w / 2, v.y + v.h / 2);
@@ -2845,16 +2933,17 @@ function drawVehicles() {
       ctx.fillRect(v.x - P * 3, GROUND_Y, v.w + P * 6, H - GROUND_Y);
       ctx.globalAlpha = 1;
     }
-  });
+  }
 }
 
 function drawStreetLamps() {
   const P = 4; // pixel grid size
 
-  streetLamps.forEach(lamp => {
+  for (let li = 0; li < streetLamps.length; li++) {
+    const lamp = streetLamps[li];
     const sx = lamp.worldX - scrollOffset;
     // Skip if off screen
-    if (sx < -40 || sx > W + 40) return;
+    if (sx < -40 || sx > W + 40) continue;
 
     const baseY = GROUND_Y;
     const topY = baseY - lamp.poleH;
@@ -2933,11 +3022,184 @@ function drawStreetLamps() {
     // Subtle top-edge highlight on the arm
     ctx.fillStyle = 'rgba(255, 255, 200, 0.15)';
     ctx.fillRect(sx - armW, armY, lamp.lampW, P);
-  });
+  }
+}
+
+// ── VILLAGE SCENE (end of level 3) ──
+function drawVillage() {
+  if (villageProgress <= 0) return;
+  const P = 4;
+  const alpha = villageProgress;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // ── Grass ground (transitions from road) ──
+  // Dark grass — everything is in shadow
+  const grassGrad = ctx.createLinearGradient(0, GROUND_Y, 0, H);
+  grassGrad.addColorStop(0, '#142a08');
+  grassGrad.addColorStop(0.3, '#0f1f06');
+  grassGrad.addColorStop(1, '#0a1504');
+  ctx.fillStyle = grassGrad;
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+
+  // Sparse dark grass blades along ground line
+  ctx.fillStyle = '#1a3a0c';
+  for (let gx = 0; gx < W; gx += P * 3) {
+    const gh = P + ((gx * 7 + 13) % 3) * P;
+    ctx.fillRect(gx, GROUND_Y - gh, P, gh);
+  }
+
+  // ── Dirt path (subtle, dark) ──
+  ctx.fillStyle = 'rgba(40, 30, 18, 0.3)';
+  ctx.fillRect(0, GROUND_Y + P, W, P * 5);
+
+  // ── Hut (scrolls in from right — larger, full shadow, candlelight) ──
+  if (villageProgress > 0.3) {
+    ctx.globalAlpha = alpha;
+
+    // Scroll from off-screen right to final position
+    const scrollT = Math.min(1, (villageProgress - 0.3) / 0.5);
+    const hxFinal = W - 220;
+    const hx = hxFinal + (1 - scrollT) * (W + 150 - hxFinal);
+    const houseW = P * 30;  // larger
+    const houseH = P * 22;  // taller
+    const roofH = P * 11;
+    const hy = GROUND_Y - houseH;
+
+    // House body — full shadow, near-black
+    ctx.fillStyle = '#0d0a08';
+    ctx.fillRect(hx, hy, houseW, houseH);
+    // Barely-there edge variation
+    ctx.fillStyle = '#110e0a';
+    ctx.fillRect(hx + P, hy + P, houseW - P * 2, houseH - P);
+    // Dark trim edges
+    ctx.fillStyle = '#080604';
+    ctx.fillRect(hx, hy, houseW, P);
+    ctx.fillRect(hx, hy, P, houseH);
+    ctx.fillRect(hx + houseW - P, hy, P, houseH);
+
+    // Roof — dark silhouette
+    ctx.fillStyle = '#0a0404';
+    ctx.beginPath();
+    ctx.moveTo(hx - P * 3, hy);
+    ctx.lineTo(hx + houseW / 2, hy - roofH);
+    ctx.lineTo(hx + houseW + P * 3, hy);
+    ctx.closePath();
+    ctx.fill();
+    // Faint moonlight edge on roof
+    ctx.fillStyle = '#1a0e0e';
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx + houseW / 2, hy - roofH + P);
+    ctx.lineTo(hx + houseW / 2, hy - roofH);
+    ctx.lineTo(hx - P * 3, hy);
+    ctx.closePath();
+    ctx.fill();
+
+    // Door — dark recess
+    ctx.fillStyle = '#060404';
+    const doorW = P * 5;
+    const doorH = P * 10;
+    const doorX = hx + houseW / 2 - doorW / 2;
+    ctx.fillRect(doorX, GROUND_Y - doorH, doorW, doorH);
+    // Faint doorknob
+    ctx.fillStyle = '#2a1e10';
+    ctx.fillRect(doorX + doorW - P * 2, GROUND_Y - doorH / 2, P, P);
+
+    // ── Candlelight flicker in windows ──
+    // Irregular flicker: combine multiple sine waves for organic feel
+    const flicker1 = Math.sin(frameCount * 0.07) * 0.15;
+    const flicker2 = Math.sin(frameCount * 0.13 + 2.0) * 0.1;
+    const flicker3 = Math.sin(frameCount * 0.31 + 5.0) * 0.08;
+    const candleGlow = Math.max(0.3, 0.55 + flicker1 + flicker2 + flicker3);
+
+    // Window glow — warm candlelight orange
+    const winW = P * 5;
+    const winH = P * 5;
+    const winLX = hx + P * 4;
+    const winRX = hx + houseW - P * 9;
+    const winY = hy + P * 6;
+
+    ctx.fillStyle = `rgba(255, 150, 40, ${candleGlow})`;
+    ctx.fillRect(winLX, winY, winW, winH);
+    ctx.fillRect(winRX, winY, winW, winH);
+
+    // Tiny candle flame silhouette in center of each window
+    const flameH = P + Math.sin(frameCount * 0.2) * 1.5;
+    ctx.fillStyle = `rgba(255, 220, 100, ${candleGlow * 0.9})`;
+    ctx.fillRect(winLX + winW / 2 - 1, winY + winH - P * 2 - flameH, 3, flameH + P);
+    ctx.fillRect(winRX + winW / 2 - 1, winY + winH - P * 2 - flameH, 3, flameH + P);
+    // Flame tip — brighter
+    ctx.fillStyle = `rgba(255, 255, 180, ${candleGlow * 0.7})`;
+    ctx.fillRect(winLX + winW / 2, winY + winH - P * 2 - flameH - 1, 1, 2);
+    ctx.fillRect(winRX + winW / 2, winY + winH - P * 2 - flameH - 1, 1, 2);
+
+    // Window light spill on ground
+    ctx.globalAlpha = alpha * 0.15 * candleGlow;
+    ctx.fillStyle = '#cc8020';
+    // Left window spill
+    ctx.beginPath();
+    ctx.moveTo(winLX - P, winY + winH);
+    ctx.lineTo(winLX + winW + P, winY + winH);
+    ctx.lineTo(winLX + winW + P * 4, GROUND_Y);
+    ctx.lineTo(winLX - P * 4, GROUND_Y);
+    ctx.closePath();
+    ctx.fill();
+    // Right window spill
+    ctx.beginPath();
+    ctx.moveTo(winRX - P, winY + winH);
+    ctx.lineTo(winRX + winW + P, winY + winH);
+    ctx.lineTo(winRX + winW + P * 4, GROUND_Y);
+    ctx.lineTo(winRX - P * 4, GROUND_Y);
+    ctx.closePath();
+    ctx.fill();
+    // Ground glow pools
+    ctx.globalAlpha = alpha * 0.1 * candleGlow;
+    ctx.fillRect(winLX - P * 3, GROUND_Y, winW + P * 6, P * 3);
+    ctx.fillRect(winRX - P * 3, GROUND_Y, winW + P * 6, P * 3);
+    ctx.globalAlpha = alpha;
+
+    // Window frames — dark silhouettes against candlelight
+    ctx.fillStyle = '#080604';
+    // Left window cross
+    ctx.fillRect(winLX + winW / 2 - 1, winY, 2, winH);
+    ctx.fillRect(winLX, winY + winH / 2 - 1, winW, 2);
+    // Right window cross
+    ctx.fillRect(winRX + winW / 2 - 1, winY, 2, winH);
+    ctx.fillRect(winRX, winY + winH / 2 - 1, winW, 2);
+
+    // Chimney — dark silhouette
+    ctx.fillStyle = '#080505';
+    ctx.fillRect(hx + houseW - P * 8, hy - roofH + P * 3, P * 4, roofH - P * 3);
+    // Faint smoke wisps
+    for (let s = 0; s < 3; s++) {
+      const smokeY = hy - roofH - P * 2 - s * P * 5 + Math.sin(frameCount * 0.018 + s * 2.2) * 5;
+      const smokeX = hx + houseW - P * 6 + Math.sin(frameCount * 0.012 + s * 1.7) * 7;
+      const smokeA = 0.06 - s * 0.015;
+      ctx.globalAlpha = alpha * smokeA;
+      ctx.fillStyle = '#444444';
+      ctx.fillRect(smokeX - P, smokeY - P, P * 3, P * 2);
+    }
+
+    // Small fence — dark silhouette
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#0e0a08';
+    for (let fx = hx - P * 8; fx < hx - P * 1; fx += P * 3) {
+      ctx.fillRect(fx, GROUND_Y - P * 6, P, P * 6);
+    }
+    ctx.fillRect(hx - P * 8, GROUND_Y - P * 5, P * 18, P);
+    ctx.fillRect(hx - P * 8, GROUND_Y - P * 3, P * 18, P);
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 function drawPlayer() {
   if (!player.alive) return;
+  // Invincibility flash — blink every 4 frames
+  if (player.invincible > 0 && Math.floor(frameCount / 4) % 2 === 0) return;
 
   const cx = player.x + player.w / 2;
   const cy = player.y + player.h / 2;
@@ -3143,6 +3405,126 @@ function drawHUD() {
   }
 }
 
+// ── PRE-COMPUTED LEGEND ARRAYS (avoid per-frame allocation) ──
+const MENU_LEGEND_LINES = [
+  { text: 'In the year 20XX,', color: '#998877', size: 16 },
+  { text: 'the volcanoes woke.', color: '#998877', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'Neo Tokyo burned', color: '#998877', size: 16 },
+  { text: 'from the inside out.', color: '#998877', size: 16 },
+  { text: 'Lava poured from', color: '#998877', size: 16 },
+  { text: 'the sky like rain,', color: '#998877', size: 16 },
+  { text: 'swallowing streets', color: '#998877', size: 16 },
+  { text: 'whole.', color: '#998877', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'The emergency sirens', color: '#887766', size: 16 },
+  { text: 'never stopped.', color: '#887766', size: 16 },
+  { text: 'Firetrucks melted', color: '#887766', size: 16 },
+  { text: 'in their lanes.', color: '#887766', size: 16 },
+  { text: 'A school bus full', color: '#887766', size: 16 },
+  { text: 'of kids screamed', color: '#887766', size: 16 },
+  { text: 'through an intersection', color: '#887766', size: 16 },
+  { text: 'that no longer existed.', color: '#887766', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'Most people ran.', color: '#998877', size: 16 },
+  { text: 'Most didn\'t make it.', color: '#998877', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'But one figure stayed', color: '#aabbcc', size: 16 },
+  { text: 'on the rooftops.', color: '#aabbcc', size: 16 },
+  { text: 'A shadow against', color: '#aabbcc', size: 16 },
+  { text: 'the glow.', color: '#aabbcc', size: 16 },
+  { text: 'They called him...', color: '#aabbcc', size: 16 },
+  { text: '', color: '', size: 12 },
+  { text: 'GET GOOD DAD.', color: '#44aaff', size: 24, bold: true },
+  { text: '', color: '', size: 18 },
+  { text: 'No one knows where', color: '#887766', size: 16 },
+  { text: 'he trained.', color: '#887766', size: 16 },
+  { text: 'Some say he practiced', color: '#887766', size: 16 },
+  { text: 'for years in a hidden', color: '#887766', size: 16 },
+  { text: 'dojo beneath the city.', color: '#887766', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'Others say the dojo', color: '#998877', size: 16 },
+  { text: 'found him.', color: '#998877', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'He doesn\'t talk much.', color: '#aabbcc', size: 16 },
+  { text: 'He doesn\'t need to.', color: '#aabbcc', size: 16 },
+  { text: 'His feet never touch', color: '#aabbcc', size: 16 },
+  { text: 'the lava.', color: '#aabbcc', size: 16 },
+  { text: '', color: '', size: 14 },
+  { text: 'He runs. He jumps.', color: '#ffcc66', size: 18, bold: true },
+  { text: 'He survives.', color: '#ffcc66', size: 18, bold: true },
+  { text: '', color: '', size: 10 },
+  { text: 'He is the only hope.', color: '#ffcc44', size: 18, bold: true },
+  { text: '', color: '', size: 14 },
+  { text: 'And when the world', color: '#887766', size: 16 },
+  { text: 'resets... he does it', color: '#887766', size: 16 },
+  { text: 'again.', color: '#887766', size: 16 },
+  { text: '', color: '', size: 18 },
+  { text: 'Every. Single. Time.', color: '#44aaff', size: 18, bold: true },
+  { text: '', color: '', size: 24 },
+  { text: 'The dojo is always', color: '#ffcc44', size: 16 },
+  { text: 'open.', color: '#ffcc44', size: 16 },
+];
+const MENU_LEGEND_LINE_GAP = 22;
+let MENU_LEGEND_TOTAL_H = 0;
+MENU_LEGEND_LINES.forEach(l => MENU_LEGEND_TOTAL_H += l.size + MENU_LEGEND_LINE_GAP * 0.5);
+// Pre-compute font strings for legend lines
+const MENU_LEGEND_FONTS = MENU_LEGEND_LINES.map(l =>
+  l.text ? `${l.bold ? 'bold ' : ''}${l.size}px ${GAME_FONT}` : ''
+);
+
+const GAMEOVER_LEGEND_LINES = [
+  { text: 'GAME OVER', font: FONT_28B, color: '#ff4400', gap: 10 },
+  { text: 'The Legend of Get Good Dad', font: FONT_16B, color: '#ffcc44', gap: 30 },
+  { text: '', font: '', color: '', gap: 10 },
+  { text: 'They say he wasn\'t always called Get Good Dad.', font: FONT_12, color: '#ccbbaa', gap: 8 },
+  { text: '', font: '', color: '', gap: 8 },
+  { text: 'Long before the lava rose...', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'before the pixels cracked...', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'before the world reset itself over and over again...', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'he was just a player like you.', font: FONT_12, color: '#ccbbaa', gap: 16 },
+  { text: 'He missed jumps.', font: FONT_12, color: '#aa9988', gap: 4 },
+  { text: 'He hit the wrong buttons.', font: FONT_12, color: '#aa9988', gap: 4 },
+  { text: 'He blamed the controller.', font: FONT_12, color: '#aa9988', gap: 4 },
+  { text: 'He said, "That was cheap."', font: FONT_12, color: '#aa9988', gap: 16 },
+  { text: 'And every time the screen went dark...', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'a voice echoed from somewhere deep in the code:', font: FONT_12, color: '#ccbbaa', gap: 12 },
+  { text: '"Get good."', font: FONT_16B, color: '#44aaff', gap: 20 },
+  { text: 'At first, it felt like an insult.', font: FONT_12, color: '#aa9988', gap: 16 },
+  { text: 'But then... something changed.', font: FONT_12, color: '#ccbbaa', gap: 12 },
+  { text: 'He started watching. Learning. Trying again.', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'He studied enemy patterns.', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'Timed his jumps.', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'Mastered the mechanics.', font: FONT_12, color: '#ccbbaa', gap: 12 },
+  { text: 'Failure stopped being the end...', font: FONT_12, color: '#ddccbb', gap: 4 },
+  { text: 'and became the lesson.', font: FONT_13B, color: '#ffcc66', gap: 16 },
+  { text: 'And with every retry... he got better.', font: FONT_12, color: '#ccbbaa', gap: 8 },
+  { text: 'Stronger. Faster. Sharper.', font: FONT_13B, color: '#44aaff', gap: 16 },
+  { text: 'Until one day...', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'the game didn\'t defeat him anymore.', font: FONT_12, color: '#ccbbaa', gap: 8 },
+  { text: 'He defeated the game.', font: FONT_10B, color: '#ffcc44', gap: 20 },
+  { text: 'But instead of leaving... he stayed.', font: FONT_12, color: '#ccbbaa', gap: 16 },
+  { text: 'Now he lives inside the system.', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'Not as a boss. Not as an enemy.', font: FONT_12, color: '#aa9988', gap: 4 },
+  { text: 'But as a guide.', font: FONT_13B, color: '#44aaff', gap: 16 },
+  { text: 'A legend whispered between players...', font: FONT_12, color: '#ccbbaa', gap: 4 },
+  { text: 'a message hidden in every defeat...', font: FONT_12, color: '#ccbbaa', gap: 16 },
+  { text: 'When the screen fades to black...', font: FONT_12, color: '#aa9988', gap: 4 },
+  { text: 'and you think it\'s over...', font: FONT_12, color: '#aa9988', gap: 12 },
+  { text: 'Listen closely.', font: FONT_13B, color: '#ddccbb', gap: 8 },
+  { text: 'Because you might hear him.', font: FONT_12, color: '#ccbbaa', gap: 20 },
+  { text: '', font: '', color: '', gap: 10 },
+  { text: 'SPRITE', font: '', color: '', gap: 100 },
+  { text: '', font: '', color: '', gap: 20 },
+  { text: '"You\'re not done..."', font: FONT_10B, color: '#44aaff', gap: 6 },
+  { text: '"You\'re just getting started."', font: FONT_10B, color: '#44aaff', gap: 10 },
+  { text: '"Get good."', font: FONT_18B, color: '#ffcc44', gap: 40 },
+  { text: '', font: '', color: '', gap: 20 },
+];
+
+// Hoist lava pool colors
+const LAVA_COLORS = ['#ff6600', '#ff4400', '#ee2200', '#cc1100', '#ffaa00', '#ff8800'];
+
 function drawMenu() {
   // Dissolve factor: 0 during pause, ramps to 1 slowly as scroll starts
   const dissolve = menuScrollY <= 0 ? 0 : Math.min(1, menuScrollY / 250);
@@ -3215,72 +3597,12 @@ function drawMenu() {
   // ── Scrolling legend crawl ──
   // Only draw when scroll has started (menuScrollY > 0)
   if (menuScrollY > 0) {
-    const menuLegendLines = [
-      { text: 'In the year 20XX,', color: '#998877', size: 16 },
-      { text: 'the volcanoes woke.', color: '#998877', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'Neo Tokyo burned', color: '#998877', size: 16 },
-      { text: 'from the inside out.', color: '#998877', size: 16 },
-      { text: 'Lava poured from', color: '#998877', size: 16 },
-      { text: 'the sky like rain,', color: '#998877', size: 16 },
-      { text: 'swallowing streets', color: '#998877', size: 16 },
-      { text: 'whole.', color: '#998877', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'The emergency sirens', color: '#887766', size: 16 },
-      { text: 'never stopped.', color: '#887766', size: 16 },
-      { text: 'Firetrucks melted', color: '#887766', size: 16 },
-      { text: 'in their lanes.', color: '#887766', size: 16 },
-      { text: 'A school bus full', color: '#887766', size: 16 },
-      { text: 'of kids screamed', color: '#887766', size: 16 },
-      { text: 'through an intersection', color: '#887766', size: 16 },
-      { text: 'that no longer existed.', color: '#887766', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'Most people ran.', color: '#998877', size: 16 },
-      { text: 'Most didn\'t make it.', color: '#998877', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'But one figure stayed', color: '#aabbcc', size: 16 },
-      { text: 'on the rooftops.', color: '#aabbcc', size: 16 },
-      { text: 'A shadow against', color: '#aabbcc', size: 16 },
-      { text: 'the glow.', color: '#aabbcc', size: 16 },
-      { text: 'They called him...', color: '#aabbcc', size: 16 },
-      { text: '', color: '', size: 12 },
-      { text: 'GET GOOD DAD.', color: '#44aaff', size: 24, bold: true },
-      { text: '', color: '', size: 18 },
-      { text: 'No one knows where', color: '#887766', size: 16 },
-      { text: 'he trained.', color: '#887766', size: 16 },
-      { text: 'Some say he practiced', color: '#887766', size: 16 },
-      { text: 'for years in a hidden', color: '#887766', size: 16 },
-      { text: 'dojo beneath the city.', color: '#887766', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'Others say the dojo', color: '#998877', size: 16 },
-      { text: 'found him.', color: '#998877', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'He doesn\'t talk much.', color: '#aabbcc', size: 16 },
-      { text: 'He doesn\'t need to.', color: '#aabbcc', size: 16 },
-      { text: 'His feet never touch', color: '#aabbcc', size: 16 },
-      { text: 'the lava.', color: '#aabbcc', size: 16 },
-      { text: '', color: '', size: 14 },
-      { text: 'He runs. He jumps.', color: '#ffcc66', size: 18, bold: true },
-      { text: 'He survives.', color: '#ffcc66', size: 18, bold: true },
-      { text: '', color: '', size: 10 },
-      { text: 'He is the only hope.', color: '#ffcc44', size: 18, bold: true },
-      { text: '', color: '', size: 14 },
-      { text: 'And when the world', color: '#887766', size: 16 },
-      { text: 'resets... he does it', color: '#887766', size: 16 },
-      { text: 'again.', color: '#887766', size: 16 },
-      { text: '', color: '', size: 18 },
-      { text: 'Every. Single. Time.', color: '#44aaff', size: 18, bold: true },
-      { text: '', color: '', size: 24 },
-      { text: 'The dojo is always', color: '#ffcc44', size: 16 },
-      { text: 'open.', color: '#ffcc44', size: 16 },
-    ];
+    // Use pre-computed legend arrays (hoisted to module scope)
 
-    const lineGap = 22;
-    let totalLegendH = 0;
-    menuLegendLines.forEach(l => totalLegendH += l.size + lineGap * 0.5);
-
-    // Scroll zone — expands as title fades. Once dissolved, use full screen
-    const scrollZoneTop = dissolve >= 1 ? 30 : H / 2 + 100;
+    // Scroll zone — smoothly expands as title fades
+    const scrollZoneTopStart = H / 2 + 100;
+    const scrollZoneTopEnd = 30;
+    const scrollZoneTop = scrollZoneTopStart + (scrollZoneTopEnd - scrollZoneTopStart) * dissolve;
     const scrollZoneH = H - scrollZoneTop - 10;
     const fadeH = 35;
 
@@ -3291,27 +3613,26 @@ function drawMenu() {
 
     let yPos = scrollZoneTop + scrollZoneH - menuScrollY;
     // Loop the scroll
-    if (yPos + totalLegendH < scrollZoneTop) {
+    if (yPos + MENU_LEGEND_TOTAL_H < scrollZoneTop) {
       menuScrollY = -60; // brief pause before repeating
       yPos = scrollZoneTop + scrollZoneH;
     }
 
     ctx.textAlign = 'center';
-    for (const line of menuLegendLines) {
-      yPos += line.size + lineGap * 0.5;
+    for (let li = 0; li < MENU_LEGEND_LINES.length; li++) {
+      const line = MENU_LEGEND_LINES[li];
+      yPos += line.size + MENU_LEGEND_LINE_GAP * 0.5;
       if (yPos < scrollZoneTop - 20 || yPos > scrollZoneTop + scrollZoneH + 20) continue;
       if (!line.text) continue;
 
       let alpha = 0.8;
-      const distFromTop = yPos - scrollZoneTop;
       const distFromBottom = (scrollZoneTop + scrollZoneH) - yPos;
-      if (distFromTop < fadeH) alpha *= distFromTop / fadeH;
       if (distFromBottom < fadeH) alpha *= distFromBottom / fadeH;
       alpha = Math.max(0, Math.min(0.8, alpha));
 
       ctx.globalAlpha = alpha;
       ctx.fillStyle = line.color;
-      ctx.font = `${line.bold ? 'bold ' : ''}${line.size}px ${GAME_FONT}`;
+      ctx.font = MENU_LEGEND_FONTS[li];
       ctx.fillText(line.text, W / 2, yPos);
     }
 
@@ -3438,6 +3759,108 @@ function drawRespawnScreen() {
 let victoryScrollDone = false;
 let victoryBaseScore = 0;
 let victoryLifeBonus = 0;
+let victoryLegendCache = null; // built once on victory trigger
+
+function buildVictoryLegend() {
+  const lines = [
+    { text: 'CONGRATULATIONS', font: FONT_24B, color: '#ffcc00', gap: 20 },
+    { text: '', font: '', color: '', gap: 20 },
+    { text: 'SCORE: ' + victoryBaseScore.toLocaleString(), font: FONT_14B, color: '#ffcc88', gap: 8 },
+    { text: lives + (lives === 1 ? ' life' : ' lives') + ' remaining', font: FONT_12, color: '#aaddff', gap: 6 },
+    { text: 'LIFE BONUS: +' + victoryLifeBonus.toLocaleString(), font: FONT_12B, color: lives >= MAX_LIVES ? '#ffcc00' : '#88ddff', gap: 10 },
+    { text: '', font: '', color: '', gap: 6 },
+    { text: 'TOTAL SCORE: ' + score.toLocaleString(), font: FONT_18B, color: '#ffcc00', gap: 14 },
+  ];
+  if (lives >= MAX_LIVES) {
+    lines.push(
+      { text: '', font: '', color: '', gap: 10 },
+      { text: 'GRAND LEGEND STATUS', font: FONT_18B, color: '#ffcc00', gap: 10 },
+      { text: 'The Goodest of', font: FONT_14B, color: '#ffcc44', gap: 6 },
+      { text: 'Get Good Dads', font: FONT_14B, color: '#ffcc44', gap: 10 },
+      { text: '', font: '', color: '', gap: 6 },
+      { text: 'Not a single life lost.', font: FONT_12, color: '#aaddff', gap: 6 },
+      { text: 'Perfection.', font: FONT_13B, color: '#44aaff', gap: 10 }
+    );
+  }
+  lines.push(
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'He made it.', font: FONT_14B, color: '#ffcc66', gap: 16 },
+    { text: '', font: '', color: '', gap: 8 },
+    { text: 'Three districts of fire and ruin.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'Three levels of molten hell.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'And Get Good Dad reached', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'the edge of the city.', font: FONT_12, color: '#ccbbaa', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'Behind him...', font: FONT_12, color: '#998877', gap: 8 },
+    { text: 'the streets are silent now.', font: FONT_12, color: '#998877', gap: 6 },
+    { text: 'The sirens have stopped.', font: FONT_12, color: '#998877', gap: 6 },
+    { text: 'The buses no longer scream.', font: FONT_12, color: '#998877', gap: 16 },
+    { text: '', font: '', color: '', gap: 8 },
+    { text: 'Thousands died.', font: FONT_13B, color: '#ff6644', gap: 12 },
+    { text: '', font: '', color: '', gap: 6 },
+    { text: 'But many more survived.', font: FONT_13B, color: '#44aaff', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'Because of him.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'Because he ran when others froze.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'Because he jumped when others fell.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'Because he refused to stop.', font: FONT_12, color: '#ccbbaa', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'But this isn\'t over.', font: FONT_13B, color: '#ffcc66', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'Beyond the city limits...', font: FONT_12, color: '#998877', gap: 6 },
+    { text: 'the ground cracks open.', font: FONT_12, color: '#998877', gap: 6 },
+    { text: 'The sky glows red.', font: FONT_12, color: '#998877', gap: 6 },
+    { text: 'The earth shakes with a heartbeat', font: FONT_12, color: '#998877', gap: 6 },
+    { text: 'that is not human.', font: FONT_12, color: '#998877', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'The volcano.', font: FONT_16B, color: '#ff4400', gap: 16 },
+    { text: '', font: '', color: '', gap: 8 },
+    { text: 'Something lives inside it.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'Something ancient.', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'Something that has been feeding', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'on the fire and the fear', font: FONT_12, color: '#ccbbaa', gap: 6 },
+    { text: 'and the screams of a burning city.', font: FONT_12, color: '#ccbbaa', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'A demon.', font: FONT_18B, color: '#ff2200', gap: 16 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'It will not stop at Neo Tokyo.', font: FONT_12, color: '#aa9988', gap: 6 },
+    { text: 'It will swallow the world.', font: FONT_12, color: '#aa9988', gap: 6 },
+    { text: 'City by city.', font: FONT_12, color: '#aa9988', gap: 6 },
+    { text: 'Until everything is lava.', font: FONT_13B, color: '#ff6644', gap: 20 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'Unless someone stops it.', font: FONT_12, color: '#ccbbaa', gap: 16 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'SPRITE', font: '', color: '', gap: 110 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'He must reach the volcano.', font: FONT_14B, color: '#ffcc66', gap: 8 },
+    { text: 'He must face the demon within.', font: FONT_14B, color: '#ffcc66', gap: 8 },
+    { text: 'He must save the world.', font: FONT_14B, color: '#ffcc66', gap: 24 },
+    { text: '', font: '', color: '', gap: 10 },
+    { text: 'He is Get Good Dad.', font: FONT_18B, color: '#ffcc44', gap: 16 },
+    { text: '', font: '', color: '', gap: 8 },
+    { text: 'And he is the only one who can.', font: FONT_13B, color: '#44aaff', gap: 30 },
+    { text: '', font: '', color: '', gap: 20 },
+    { text: 'TO BE CONTINUED...', font: FONT_20B, color: '#ff4400', gap: 30 },
+    { text: '', font: '', color: '', gap: 40 }
+  );
+  if (totalAttempts >= 512) {
+    lines.splice(lines.length - 1, 0,
+      { text: '', font: '', color: '', gap: 20 },
+      { text: '...', font: FONT_12, color: '#667788', gap: 20 },
+      { text: totalAttempts + ' attempts.', font: FONT_14B, color: '#ffcc88', gap: 10 },
+      { text: '', font: '', color: '', gap: 8 },
+      { text: 'You never gave up.', font: FONT_14B, color: '#44aaff', gap: 8 },
+      { text: 'You never quit.', font: FONT_14B, color: '#44aaff', gap: 8 },
+      { text: 'You never stopped trying.', font: FONT_14B, color: '#44aaff', gap: 20 },
+      { text: '', font: '', color: '', gap: 10 },
+      { text: 'That is what it means', font: FONT_12, color: '#ccbbaa', gap: 6 },
+      { text: 'to get good.', font: FONT_16B, color: '#ffcc44', gap: 20 },
+      { text: '', font: '', color: '', gap: 10 },
+      { text: 'You are Get Good Dad.', font: FONT_18B, color: '#ffcc00', gap: 30 }
+    );
+  }
+  return lines;
+}
 
 function drawVictory() {
   const t = deathTimer;
@@ -3453,103 +3876,7 @@ function drawVictory() {
 
   if (t > scrollStart) {
     const scrollY = (t - scrollStart) * 0.4; // scroll speed
-
-    const legendLines = [
-      { text: 'CONGRATULATIONS', font: `bold 24px ${GAME_FONT}`, color: '#ffcc00', gap: 20 },
-      { text: '', font: '', color: '', gap: 20 },
-      { text: `SCORE: ${victoryBaseScore.toLocaleString()}`, font: `bold 14px ${GAME_FONT}`, color: '#ffcc88', gap: 8 },
-      { text: `${lives} ${lives === 1 ? 'life' : 'lives'} remaining`, font: `12px ${GAME_FONT}`, color: '#aaddff', gap: 6 },
-      { text: `LIFE BONUS: +${victoryLifeBonus.toLocaleString()}`, font: `bold 12px ${GAME_FONT}`, color: lives >= MAX_LIVES ? '#ffcc00' : '#88ddff', gap: 10 },
-      { text: '', font: '', color: '', gap: 6 },
-      { text: `TOTAL SCORE: ${score.toLocaleString()}`, font: `bold 18px ${GAME_FONT}`, color: '#ffcc00', gap: 14 },
-      ...(lives >= MAX_LIVES ? [
-        { text: '', font: '', color: '', gap: 10 },
-        { text: 'GRAND LEGEND STATUS', font: `bold 18px ${GAME_FONT}`, color: '#ffcc00', gap: 10 },
-        { text: 'The Goodest of', font: `bold 14px ${GAME_FONT}`, color: '#ffcc44', gap: 6 },
-        { text: 'Get Good Dads', font: `bold 14px ${GAME_FONT}`, color: '#ffcc44', gap: 10 },
-        { text: '', font: '', color: '', gap: 6 },
-        { text: 'Not a single life lost.', font: `12px ${GAME_FONT}`, color: '#aaddff', gap: 6 },
-        { text: 'Perfection.', font: `bold 13px ${GAME_FONT}`, color: '#44aaff', gap: 10 },
-      ] : []),
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'He made it.', font: `bold 14px ${GAME_FONT}`, color: '#ffcc66', gap: 16 },
-      { text: '', font: '', color: '', gap: 8 },
-      { text: 'Three districts of fire and ruin.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'Three levels of molten hell.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'And Get Good Dad reached', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'the edge of the city.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'Behind him...', font: `12px ${GAME_FONT}`, color: '#998877', gap: 8 },
-      { text: 'the streets are silent now.', font: `12px ${GAME_FONT}`, color: '#998877', gap: 6 },
-      { text: 'The sirens have stopped.', font: `12px ${GAME_FONT}`, color: '#998877', gap: 6 },
-      { text: 'The buses no longer scream.', font: `12px ${GAME_FONT}`, color: '#998877', gap: 16 },
-      { text: '', font: '', color: '', gap: 8 },
-      { text: 'Thousands died.', font: `bold 13px ${GAME_FONT}`, color: '#ff6644', gap: 12 },
-      { text: '', font: '', color: '', gap: 6 },
-      { text: 'But many more survived.', font: `bold 13px ${GAME_FONT}`, color: '#44aaff', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'Because of him.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'Because he ran when others froze.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'Because he jumped when others fell.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'Because he refused to stop.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'But this isn\'t over.', font: `bold 13px ${GAME_FONT}`, color: '#ffcc66', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'Beyond the city limits...', font: `12px ${GAME_FONT}`, color: '#998877', gap: 6 },
-      { text: 'the ground cracks open.', font: `12px ${GAME_FONT}`, color: '#998877', gap: 6 },
-      { text: 'The sky glows red.', font: `12px ${GAME_FONT}`, color: '#998877', gap: 6 },
-      { text: 'The earth shakes with a heartbeat', font: `12px ${GAME_FONT}`, color: '#998877', gap: 6 },
-      { text: 'that is not human.', font: `12px ${GAME_FONT}`, color: '#998877', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'The volcano.', font: `bold 16px ${GAME_FONT}`, color: '#ff4400', gap: 16 },
-      { text: '', font: '', color: '', gap: 8 },
-      { text: 'Something lives inside it.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'Something ancient.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'Something that has been feeding', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'on the fire and the fear', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-      { text: 'and the screams of a burning city.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'A demon.', font: `bold 18px ${GAME_FONT}`, color: '#ff2200', gap: 16 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'It will not stop at Neo Tokyo.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 6 },
-      { text: 'It will swallow the world.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 6 },
-      { text: 'City by city.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 6 },
-      { text: 'Until everything is lava.', font: `bold 13px ${GAME_FONT}`, color: '#ff6644', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'Unless someone stops it.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 16 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'SPRITE', font: '', color: '', gap: 110 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'He must reach the volcano.', font: `bold 14px ${GAME_FONT}`, color: '#ffcc66', gap: 8 },
-      { text: 'He must face the demon within.', font: `bold 14px ${GAME_FONT}`, color: '#ffcc66', gap: 8 },
-      { text: 'He must save the world.', font: `bold 14px ${GAME_FONT}`, color: '#ffcc66', gap: 24 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'He is Get Good Dad.', font: `bold 18px ${GAME_FONT}`, color: '#ffcc44', gap: 16 },
-      { text: '', font: '', color: '', gap: 8 },
-      { text: 'And he is the only one who can.', font: `bold 13px ${GAME_FONT}`, color: '#44aaff', gap: 30 },
-      { text: '', font: '', color: '', gap: 20 },
-      { text: 'TO BE CONTINUED...', font: `bold 20px ${GAME_FONT}`, color: '#ff4400', gap: 30 },
-      { text: '', font: '', color: '', gap: 40 },
-    ];
-
-    // 512+ attempts: special persistence message
-    if (totalAttempts >= 512) {
-      // Insert before the last empty gap
-      legendLines.splice(legendLines.length - 1, 0,
-        { text: '', font: '', color: '', gap: 20 },
-        { text: '...', font: `12px ${GAME_FONT}`, color: '#667788', gap: 20 },
-        { text: `${totalAttempts} attempts.`, font: `bold 14px ${GAME_FONT}`, color: '#ffcc88', gap: 10 },
-        { text: '', font: '', color: '', gap: 8 },
-        { text: 'You never gave up.', font: `bold 14px ${GAME_FONT}`, color: '#44aaff', gap: 8 },
-        { text: 'You never quit.', font: `bold 14px ${GAME_FONT}`, color: '#44aaff', gap: 8 },
-        { text: 'You never stopped trying.', font: `bold 14px ${GAME_FONT}`, color: '#44aaff', gap: 20 },
-        { text: '', font: '', color: '', gap: 10 },
-        { text: 'That is what it means', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 6 },
-        { text: 'to get good.', font: `bold 16px ${GAME_FONT}`, color: '#ffcc44', gap: 20 },
-        { text: '', font: '', color: '', gap: 10 },
-        { text: 'You are Get Good Dad.', font: `bold 18px ${GAME_FONT}`, color: '#ffcc00', gap: 30 },
-      );
-    }
+    const legendLines = victoryLegendCache;
 
     // Calculate positions and draw
     let yPos = H + 40 - scrollY;
@@ -3821,55 +4148,7 @@ function drawDeathScreen() {
     const gapH = 14;  // extra gap between paragraphs
     ctx.textAlign = 'center';
 
-    // The legend text lines
-    const legendLines = [
-      { text: 'GAME OVER', font: `bold 28px ${GAME_FONT}`, color: '#ff4400', gap: 10 },
-      { text: 'The Legend of Get Good Dad', font: `bold 16px ${GAME_FONT}`, color: '#ffcc44', gap: 30 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'They say he wasn\'t always called Get Good Dad.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 8 },
-      { text: '', font: '', color: '', gap: 8 },
-      { text: 'Long before the lava rose...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'before the pixels cracked...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'before the world reset itself over and over again...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'he was just a player like you.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 16 },
-      { text: 'He missed jumps.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 4 },
-      { text: 'He hit the wrong buttons.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 4 },
-      { text: 'He blamed the controller.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 4 },
-      { text: 'He said, "That was cheap."', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 16 },
-      { text: 'And every time the screen went dark...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'a voice echoed from somewhere deep in the code:', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 12 },
-      { text: '"Get good."', font: `bold 16px ${GAME_FONT}`, color: '#44aaff', gap: 20 },
-      { text: 'At first, it felt like an insult.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 16 },
-      { text: 'But then... something changed.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 12 },
-      { text: 'He started watching. Learning. Trying again.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'He studied enemy patterns.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'Timed his jumps.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'Mastered the mechanics.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 12 },
-      { text: 'Failure stopped being the end...', font: `12px ${GAME_FONT}`, color: '#ddccbb', gap: 4 },
-      { text: 'and became the lesson.', font: `bold 13px ${GAME_FONT}`, color: '#ffcc66', gap: 16 },
-      { text: 'And with every retry... he got better.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 8 },
-      { text: 'Stronger. Faster. Sharper.', font: `bold 13px ${GAME_FONT}`, color: '#44aaff', gap: 16 },
-      { text: 'Until one day...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'the game didn\'t defeat him anymore.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 8 },
-      { text: 'He defeated the game.', font: `bold 10px ${GAME_FONT}`, color: '#ffcc44', gap: 20 },
-      { text: 'But instead of leaving... he stayed.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 16 },
-      { text: 'Now he lives inside the system.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'Not as a boss. Not as an enemy.', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 4 },
-      { text: 'But as a guide.', font: `bold 13px ${GAME_FONT}`, color: '#44aaff', gap: 16 },
-      { text: 'A legend whispered between players...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 4 },
-      { text: 'a message hidden in every defeat...', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 16 },
-      { text: 'When the screen fades to black...', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 4 },
-      { text: 'and you think it\'s over...', font: `12px ${GAME_FONT}`, color: '#aa9988', gap: 12 },
-      { text: 'Listen closely.', font: `bold 13px ${GAME_FONT}`, color: '#ddccbb', gap: 8 },
-      { text: 'Because you might hear him.', font: `12px ${GAME_FONT}`, color: '#ccbbaa', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'SPRITE', font: '', color: '', gap: 100 }, // placeholder for sprite image
-      { text: '', font: '', color: '', gap: 20 },
-      { text: '"You\'re not done..."', font: `bold 10px ${GAME_FONT}`, color: '#44aaff', gap: 6 },
-      { text: '"You\'re just getting started."', font: `bold 10px ${GAME_FONT}`, color: '#44aaff', gap: 10 },
-      { text: '"Get good."', font: `bold 18px ${GAME_FONT}`, color: '#ffcc44', gap: 40 },
-      { text: '', font: '', color: '', gap: 20 },
-    ];
+    const legendLines = GAMEOVER_LEGEND_LINES;
 
     // Calculate positions and draw
     let yPos = H + 40 - scrollY; // start below screen, scroll up
@@ -4051,6 +4330,7 @@ function draw() {
   } else if (gameState === 'dojo') {
     drawDojo();
   } else {
+    // Draw city normally — no fading
     drawNeoTokyoSky();
     drawBuildingLayer(buildings_far, 0.1, 0);
     drawBuildingLayer(buildings_mid, 0.3, 0.3);
@@ -4058,6 +4338,16 @@ function draw() {
     drawBuildingLayer(buildings_near, 0.5, 0.1);
     drawStreet();
     drawStreetLamps();
+
+    // Shadow overlay — everything falls into darkness near end of level 3
+    if (villageProgress > 0) {
+      const shadowDepth = Math.min(0.85, villageProgress * 0.9);
+      ctx.fillStyle = `rgba(0, 0, 0, ${shadowDepth})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Village environment draws on top of the shadow
+    drawVillage();
     drawLavaPools();
     drawVehicles();
     drawLavaDrops();
