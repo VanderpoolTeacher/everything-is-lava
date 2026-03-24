@@ -996,9 +996,12 @@ function drawVehicleDebris() {
 const keys = {};
 let jumpBuffered = false;
 
-// ── KONAMI CODE: up up down down left right left right b a space ──
-const KONAMI_SEQ = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','KeyB','KeyA','Space'];
+// ── KONAMI CODE: up up down down left right left right b a → then press 1/2/3 for level ──
+const KONAMI_SEQ = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','KeyB','KeyA'];
 let konamiIndex = 0;
+let konamiActive = false; // true after code entered, waiting for level number
+let konamiUsed = false;   // true if player used konami to reach a level (score stays 0)
+let showHelpOverlay = false; // toggle with ? key
 
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
@@ -1024,31 +1027,77 @@ window.addEventListener('keydown', e => {
     return;
   }
 
-  // Konami code detection
+  // R key — open README in new tab
+  if (e.code === 'KeyR' && gameState !== 'playing' && gameState !== 'dojo') {
+    window.open('README.md', '_blank');
+    return;
+  }
+
+  // ? key (Slash with Shift) — toggle help overlay
+  if (e.code === 'Slash') {
+    showHelpOverlay = !showHelpOverlay;
+    return;
+  }
+
+  // Any other key dismisses help overlay
+  if (showHelpOverlay) {
+    showHelpOverlay = false;
+    return;
+  }
+
+  // Konami code detection — enter code, then press 1/2/3 to jump to level
+  if (konamiActive) {
+    // Waiting for level number after code was entered
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : 0;
+    if (levelNum > 0) {
+      konamiActive = false;
+      konamiUsed = true;
+      // Stop all audio
+      levelMusic.pause(); levelMusic.currentTime = 0;
+      titleMusic.pause(); titleMusic.currentTime = 0;
+      gameOverMusic.pause(); gameOverMusic.currentTime = 0;
+      victoryMusic.pause(); victoryMusic.currentTime = 0;
+      dojoTracks.forEach(t => { t.pause(); t.currentTime = 0; });
+      stopSiren(); stopPoliceSiren(); stopBusScream(); stopBuzz();
+      // Set up level
+      level = levelNum;
+      score = 0;
+      lives = MAX_LIVES;
+      levelDuration = 1800 + level * 300;
+      levelTimer = 0;
+      frameCount = 0;
+      scrollOffset = 0;
+      deathTimer = 0;
+      villageProgress = 0;
+      creditsTimer = 0;
+      player.x = 150;
+      player.y = GROUND_Y - SPRITE_H;
+      player.vy = 0; player.vx = 0;
+      player.grounded = true; player.jumping = false;
+      player.doubleJumped = false; player.trail = [];
+      player.alive = true; player.runFrame = 0;
+      player.spinAngle = 0; player.spinTimer = 0;
+      player.kicking = false; player.kickTimer = 0;
+      player.facingRight = true; player.idleTimer = 0;
+      player.invincible = 120;
+      lavaDrops = []; lavaPools = []; particles = [];
+      warningMarkers = []; vehicles = []; explosions = []; vehicleDebris = [];
+      generateBuildings(); generateStreetLamps();
+      gameState = 'playing';
+      musicStarted = true;
+      levelMusic.currentTime = 0;
+      levelMusic.play().catch(() => {});
+      return;
+    }
+    // Any non-number key cancels konami
+    konamiActive = false;
+    // fall through to normal input handling
+  }
   if (e.code === KONAMI_SEQ[konamiIndex]) {
     konamiIndex++;
     if (konamiIndex >= KONAMI_SEQ.length) {
       konamiIndex = 0;
-      // Skip to victory!
-      levelMusic.pause();
-      titleMusic.pause();
-      gameOverMusic.pause();
-      dojoTracks.forEach(t => { t.pause(); t.currentTime = 0; });
-      stopSiren();
-      stopPoliceSiren();
-      stopBusScream();
-      stopBuzz();
-      level = 3;
-      score = 0;
-      lives = MAX_LIVES;
-      victoryBaseScore = 0;
-      victoryLifeBonus = 0;
-      gameState = 'victory';
-      victoryScrollDone = false;
-      victoryLegendCache = buildVictoryLegend();
-      deathTimer = 0;
-      victoryMusic.currentTime = 0;
-      victoryMusic.play().catch(() => {});
+      konamiActive = true; // waiting for level number
       return;
     }
   } else {
@@ -1206,6 +1255,7 @@ function startGame() {
     score = 0;
     lives = MAX_LIVES;
     levelDuration = 1800;
+    konamiUsed = false; // reset cheat flag on normal game start
     totalAttempts++;
   }
   gameState = 'transition';
@@ -1311,13 +1361,16 @@ function update() {
   const VILLAGE_LEAD_IN = 600;
   if (level >= 3 && levelTimer > levelDuration - VILLAGE_LEAD_IN) {
     villageProgress = Math.min(1, (levelTimer - (levelDuration - VILLAGE_LEAD_IN)) / VILLAGE_LEAD_IN);
+    // Fade music as village approaches
+    const v = muted ? 0 : masterVolume;
+    levelMusic.volume = 0.5 * v * (1 - villageProgress * 0.85); // fades to 15% volume
   } else {
     villageProgress = 0;
   }
 
   // Level complete?
   if (levelTimer >= levelDuration) {
-    score += level * 1000;
+    if (!konamiUsed) score += level * 1000;
     if (level >= 3) {
       // Stop all gameplay audio
       levelMusic.pause();
@@ -1327,10 +1380,10 @@ function update() {
       stopBusScream();
       stopBuzz();
       // Life bonus: 1000 per life, 10000 if all 5
-      const lifeBonus = lives >= MAX_LIVES ? 10000 : lives * 1000;
-      victoryBaseScore = score;
+      const lifeBonus = konamiUsed ? 0 : (lives >= MAX_LIVES ? 10000 : lives * 1000);
+      victoryBaseScore = konamiUsed ? 0 : score;
       victoryLifeBonus = lifeBonus;
-      score += lifeBonus;
+      if (!konamiUsed) score += lifeBonus;
       // Beat the game!
       gameState = 'victory';
       victoryScrollDone = false;
@@ -1346,8 +1399,8 @@ function update() {
     return;
   }
 
-  // Score
-  score = Math.floor(levelTimer / 3) + (level - 1) * 1000;
+  // Score (always 0 if konami code was used)
+  score = konamiUsed ? 0 : Math.floor(levelTimer / 3) + (level - 1) * 1000;
 
   // Spawn lava drops - rate increases with level and time
   // Taper off during village transition (lava stops near the village)
@@ -1696,7 +1749,7 @@ function update() {
         spawnLavaPool(v.x + v.w / 2 + scrollOffset);
         shakeTimer = 25;
         flashTimer = 14;
-        score += 200; // bonus for lava-vehicle explosion
+        if (!konamiUsed) score += 200; // bonus for lava-vehicle explosion
         lavaDrops.splice(j, 1);
         vehicles.splice(i, 1);
         i--; // adjust index since we removed vehicle
@@ -1722,7 +1775,7 @@ function update() {
         spawnParticles(ecx, ecy, '#333333', 12, 6);
         shakeTimer = 22;
         flashTimer = 12;
-        score += 150;
+        if (!konamiUsed) score += 150;
         vehicles.splice(i, 1);
         i--;
         break;
@@ -2176,7 +2229,7 @@ function drawDojo() {
   ctx.textAlign = 'left';
   ctx.fillStyle = '#887766';
   ctx.font = `12px ${GAME_FONT}`;
-  ctx.fillText('Move: A/D  ·  Jump: Space  ·  Double Jump  ·  Kick: Arrow keys  ·  M: Change Music  ·  ESC: Exit', 15, H - 12);
+  ctx.fillText('Move: A/D  ·  Jump: Space  ·  Double Jump  ·  M: Change Music  ·  ESC: Exit', 15, H - 12);
 }
 
 // ══════════════════════════════
@@ -2202,9 +2255,12 @@ function drawNeoTokyoSky() {
       drawW = H * imgAspect;
     }
 
-    // Very slow parallax shift
+    // Very slow parallax shift — clamped so image always covers full canvas
     const volcanoParallax = 0.01;
-    const shiftX = -((scrollOffset * volcanoParallax) % (drawW * 0.08));
+    const maxShift = Math.max(1, (drawW - W) / 2); // min 1 to avoid mod-by-zero
+    const rawShift = (scrollOffset * volcanoParallax) % (maxShift * 2);
+    // Ping-pong: drift left then back right, never exceeding coverage
+    const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
     const drawX = (W - drawW) / 2 + shiftX;
     const drawY = (H - drawH) / 2; // center vertically
 
@@ -2348,21 +2404,26 @@ function drawBuildingLayer(buildings, parallaxSpeed, brightness) {
 
 function drawNeonSigns() {
   const offset = (scrollOffset * 0.3) % (W + 500);
-  // First pass: draw glow rects with shadow enabled (batched)
-  ctx.shadowBlur = 15;
+  // First pass: glow halos (cheap layered rects instead of shadowBlur)
   for (let si = 0; si < neonSigns.length; si++) {
     const s = neonSigns[si];
     const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
     if (sx < -100 || sx > W + 100) continue;
     const intensity = Math.sin(s.blink) * 0.3 + 0.7;
     const flicker = (frameCount + (s.x | 0)) % 50 === 0 ? 0.3 : 1;
-    ctx.globalAlpha = intensity * flicker;
-    ctx.shadowColor = s.color;
+    const a = intensity * flicker;
+    // Outer glow layer
+    ctx.globalAlpha = a * 0.08;
     ctx.fillStyle = s.color;
+    ctx.fillRect(sx - 8, s.y - 8, s.w + 16, s.h + 16);
+    // Inner glow layer
+    ctx.globalAlpha = a * 0.2;
+    ctx.fillRect(sx - 3, s.y - 3, s.w + 6, s.h + 6);
+    // Sign body
+    ctx.globalAlpha = a;
     ctx.fillRect(sx, s.y, s.w, s.h);
   }
-  ctx.shadowBlur = 0;
-  // Second pass: bright centers (no shadow needed)
+  // Second pass: bright centers
   for (let si = 0; si < neonSigns.length; si++) {
     const s = neonSigns[si];
     const sx = ((s.x - offset) % (W + 500) + W + 500) % (W + 500) - 100;
@@ -2491,6 +2552,17 @@ function drawStreet() {
   }
 }
 
+// Pool depth helper — hoisted out of per-frame loop to avoid closure allocation
+function poolDepthAt(col, totalCols, taperCols, maxDepth) {
+  if (col < taperCols) {
+    return Math.max(1, Math.round(maxDepth * (col + 1) / (taperCols + 1)));
+  } else if (col >= totalCols - taperCols) {
+    const fromEnd = totalCols - 1 - col;
+    return Math.max(1, Math.round(maxDepth * (fromEnd + 1) / (taperCols + 1)));
+  }
+  return maxDepth;
+}
+
 function drawLavaPools() {
   const P = 4; // pixel grid for 32-bit look
 
@@ -2510,19 +2582,6 @@ function drawLavaPools() {
     const maxDepth = 4; // max pixel rows deep at center
     const taperCols = Math.max(2, Math.floor(totalCols * 0.25)); // 25% taper on each side
 
-    // Helper: get pool depth at a given column (tapers at edges)
-    function depthAt(col) {
-      if (col < taperCols) {
-        // Left taper: 1 row at edge, ramps up to maxDepth
-        return Math.max(1, Math.round(maxDepth * (col + 1) / (taperCols + 1)));
-      } else if (col >= totalCols - taperCols) {
-        // Right taper: ramps down to 1 row at edge
-        const fromEnd = totalCols - 1 - col;
-        return Math.max(1, Math.round(maxDepth * (fromEnd + 1) / (taperCols + 1)));
-      }
-      return maxDepth;
-    }
-
     // ── Glow underneath (pixelated radial) ──
     ctx.globalAlpha = alpha * 0.3;
     const glowSteps = 4;
@@ -2539,7 +2598,7 @@ function drawLavaPools() {
 
     for (let col = 0; col < totalCols; col++) {
       const colX = lx + col * P;
-      const depth = depthAt(col);
+      const depth = poolDepthAt(col, totalCols, taperCols, maxDepth);
       for (let row = 0; row < depth; row++) {
         const rowY = GROUND_Y + row * P;
         const hash = ((col * 7 + row * 13 + Math.floor(frameCount * 0.08 + p.waveOffset)) & 0xFF);
@@ -2566,8 +2625,8 @@ function drawLavaPools() {
     const hotspotCount = Math.floor(totalCols / 4);
     for (let i = 0; i < hotspotCount; i++) {
       const hCol = ((i * 17 + Math.floor(frameCount * 0.1 + p.waveOffset * 3)) % totalCols);
-      const depth = depthAt(hCol);
-      if (depth < 2) continue; // skip thin edges
+      const depth = poolDepthAt(hCol, totalCols, taperCols, maxDepth);
+      if (depth < 2) continue;
       const hx = lx + hCol * P;
       const hy = GROUND_Y + ((i * 7 + Math.floor(frameCount * 0.06)) % depth) * P;
       ctx.fillStyle = (i + Math.floor(frameCount * 0.05)) % 3 === 0 ? '#ffee66' : '#ffaa00';
@@ -2579,24 +2638,24 @@ function drawLavaPools() {
     // Bottom edge per column
     for (let col = 0; col < totalCols; col++) {
       const colX = lx + col * P;
-      const depth = depthAt(col);
+      const depth = poolDepthAt(col, totalCols, taperCols, maxDepth);
       ctx.fillRect(colX, GROUND_Y + depth * P, P, P);
     }
     // Left edge
-    for (let row = 0; row < depthAt(0); row++) {
+    for (let row = 0; row < poolDepthAt(0, totalCols, taperCols, maxDepth); row++) {
       ctx.fillRect(lx, GROUND_Y + row * P, P, P);
     }
     // Right edge
-    for (let row = 0; row < depthAt(totalCols - 1); row++) {
+    for (let row = 0; row < poolDepthAt(totalCols - 1, totalCols, taperCols, maxDepth); row++) {
       ctx.fillRect(lx + (totalCols - 1) * P, GROUND_Y + row * P, P, P);
     }
     // Stepped side outlines on taper transitions
     for (let col = 1; col < taperCols; col++) {
-      const d1 = depthAt(col - 1), d2 = depthAt(col);
+      const d1 = poolDepthAt(col - 1, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col, totalCols, taperCols, maxDepth);
       if (d2 > d1) ctx.fillRect(lx + col * P, GROUND_Y + d1 * P, P, (d2 - d1) * P);
     }
     for (let col = totalCols - taperCols; col < totalCols - 1; col++) {
-      const d1 = depthAt(col), d2 = depthAt(col + 1);
+      const d1 = poolDepthAt(col, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col + 1, totalCols, taperCols, maxDepth);
       if (d1 > d2) ctx.fillRect(lx + col * P, GROUND_Y + d2 * P, P, (d1 - d2) * P);
     }
 
@@ -2659,24 +2718,20 @@ function drawLavaDrops() {
     const flash = Math.sin(frameCount * 0.6 + d.worldX * 0.1) * 0.4 + 0.6;
     const flashWhite = Math.max(0, Math.sin(frameCount * 0.9 + d.worldX * 0.2));
 
-    // Glow — pulses with flash
-    ctx.shadowColor = flashWhite > 0.7 ? '#ffee88' : '#ff4400';
-    ctx.shadowBlur = 12 + flash * 10;
+    // Glow halo — cheap rect instead of shadowBlur
+    const glowAlpha = (0.15 + flash * 0.1);
+    ctx.globalAlpha = glowAlpha;
+    ctx.fillStyle = flashWhite > 0.7 ? '#ffee88' : '#ff4400';
+    ctx.fillRect(sx - d.size * 2, d.y - d.size * 2, d.size * 4, d.size * 4);
 
-    // Drop body — shifts brighter on flash peaks
-    const dropGrad = ctx.createRadialGradient(sx, d.y, 1, sx, d.y, d.size);
+    ctx.globalAlpha = 1;
+
+    // Drop body — solid colors instead of radialGradient
     if (flashWhite > 0.7) {
-      // Bright flash frame
-      dropGrad.addColorStop(0, '#ffffff');
-      dropGrad.addColorStop(0.4, '#ffee66');
-      dropGrad.addColorStop(0.7, '#ff8800');
-      dropGrad.addColorStop(1, '#ff4400');
+      ctx.fillStyle = '#ffee66';
     } else {
-      dropGrad.addColorStop(0, '#ffcc00');
-      dropGrad.addColorStop(0.5, '#ff6600');
-      dropGrad.addColorStop(1, '#cc2200');
+      ctx.fillStyle = '#ff6600';
     }
-    ctx.fillStyle = dropGrad;
 
     // Teardrop shape
     ctx.beginPath();
@@ -2686,17 +2741,17 @@ function drawLavaDrops() {
     ctx.closePath();
     ctx.fill();
 
-    ctx.shadowBlur = 0;
+    // Bright core pixel
+    ctx.fillStyle = flashWhite > 0.7 ? '#ffffff' : '#ffcc00';
+    ctx.fillRect(sx - 1, d.y - 1, 2, 2);
 
-    // Trail
+    // Trail — fillRect instead of arc
     ctx.globalAlpha = 0.4;
     ctx.fillStyle = '#ff4400';
     for (let t = 1; t < 4; t++) {
       const ty = d.y - d.vy * t * 3;
       const ts = d.size * (1 - t * 0.25);
-      ctx.beginPath();
-      ctx.arc(sx + (Math.random() - 0.5) * 3, ty, ts * 0.5, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(sx - ts * 0.5, ty - ts * 0.5, ts, ts);
     }
     ctx.globalAlpha = 1;
   }
@@ -3026,13 +3081,12 @@ function drawStreetLamps() {
     ctx.fillRect(sx - armW + P * 2, armY + P * 2, lamp.lampW - P * 4, P);
     ctx.globalAlpha = 1;
 
-    // Warm glow halo around lamp
-    ctx.globalAlpha = 0.15 * flicker;
-    ctx.shadowColor = lamp.glowColor;
-    ctx.shadowBlur = 20;
+    // Warm glow halo around lamp — layered rects instead of shadowBlur
     ctx.fillStyle = lamp.glowColor;
-    ctx.fillRect(sx - armW, armY - P, lamp.lampW, P * 4);
-    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.06 * flicker;
+    ctx.fillRect(sx - armW - P * 3, armY - P * 3, lamp.lampW + P * 6, P * 10);
+    ctx.globalAlpha = 0.12 * flicker;
+    ctx.fillRect(sx - armW - P, armY - P, lamp.lampW + P * 2, P * 6);
     ctx.globalAlpha = 1;
 
     // ── Platform highlight (so player can see where to land) ──
@@ -3071,142 +3125,267 @@ function drawVillage() {
   ctx.fillStyle = 'rgba(40, 30, 18, 0.3)';
   ctx.fillRect(0, GROUND_Y + P, W, P * 5);
 
-  // ── Hut (scrolls in from right — larger, full shadow, candlelight) ──
+  // ── House + torches (scrolls in from right) ──
   if (villageProgress > 0.3) {
     ctx.globalAlpha = alpha;
 
     // Scroll from off-screen right to final position
     const scrollT = Math.min(1, (villageProgress - 0.3) / 0.5);
-    const hxFinal = W - 220;
-    const hx = hxFinal + (1 - scrollT) * (W + 150 - hxFinal);
-    const houseW = P * 30;  // larger
-    const houseH = P * 22;  // taller
-    const roofH = P * 11;
-    const hy = GROUND_Y - houseH;
+    const hxFinal = W - 240;
+    const hx = hxFinal + (1 - scrollT) * (W + 200 - hxFinal);
 
-    // House body — full shadow, near-black
-    ctx.fillStyle = '#0d0a08';
-    ctx.fillRect(hx, hy, houseW, houseH);
-    // Barely-there edge variation
+    // House dimensions
+    const houseW = P * 34;
+    const wallH = P * 18;
+    const roofH = P * 13;
+    const hy = GROUND_Y - wallH;
+
+    // ── Torch flicker (shared by all light sources) ──
+    const tf1 = Math.sin(frameCount * 0.07) * 0.15;
+    const tf2 = Math.sin(frameCount * 0.13 + 2.0) * 0.1;
+    const tf3 = Math.sin(frameCount * 0.31 + 5.0) * 0.08;
+    const torchGlow = Math.max(0.35, 0.6 + tf1 + tf2 + tf3);
+    // Second torch slightly offset in phase
+    const tf4 = Math.sin(frameCount * 0.08 + 1.0) * 0.15;
+    const tf5 = Math.sin(frameCount * 0.15 + 3.5) * 0.1;
+    const tf6 = Math.sin(frameCount * 0.28 + 4.2) * 0.08;
+    const torchGlow2 = Math.max(0.35, 0.6 + tf4 + tf5 + tf6);
+
+    // ── TORCHES (draw first so house overlaps slightly) ──
+    const torchLX = hx - P * 10;  // left torch
+    const torchRX = hx + houseW + P * 6;  // right torch
+    const torchY = GROUND_Y - P * 16; // flame height
+
+    // Draw a torch at position tx
+    for (let ti = 0; ti < 2; ti++) {
+      const tx = ti === 0 ? torchLX : torchRX;
+      const tg = ti === 0 ? torchGlow : torchGlow2;
+
+      // Ground glow pool from torch
+      ctx.globalAlpha = alpha * 0.12 * tg;
+      ctx.fillStyle = '#ff8830';
+      ctx.fillRect(tx - P * 8, GROUND_Y, P * 16, P * 4);
+      ctx.globalAlpha = alpha * 0.06 * tg;
+      ctx.fillRect(tx - P * 12, GROUND_Y - P, P * 24, P * 6);
+      ctx.globalAlpha = alpha;
+
+      // Pole — dark wood
+      ctx.fillStyle = '#1a1208';
+      ctx.fillRect(tx - P / 2, torchY + P * 2, P, GROUND_Y - torchY - P * 2);
+      ctx.fillStyle = '#241a0e';
+      ctx.fillRect(tx + P / 2, torchY + P * 2, P / 2, GROUND_Y - torchY - P * 2);
+
+      // Torch head bracket
+      ctx.fillStyle = '#2a1e10';
+      ctx.fillRect(tx - P, torchY + P, P * 2, P * 2);
+
+      // Flame — layered rectangles, animated
+      const flH = P * 3 + Math.sin(frameCount * 0.2 + ti * 3.0) * P;
+      const flW = P * 2 + Math.sin(frameCount * 0.15 + ti * 2.0) * P * 0.5;
+      // Outer flame — orange
+      ctx.fillStyle = `rgba(255, 120, 20, ${tg * 0.8})`;
+      ctx.fillRect(tx - flW / 2, torchY - flH + P * 2, flW, flH);
+      // Mid flame — yellow
+      const midH = flH * 0.65;
+      const midW = flW * 0.6;
+      ctx.fillStyle = `rgba(255, 200, 50, ${tg * 0.9})`;
+      ctx.fillRect(tx - midW / 2, torchY - midH + P * 2, midW, midH);
+      // Core — bright white-yellow
+      const coreH = flH * 0.3;
+      ctx.fillStyle = `rgba(255, 240, 150, ${tg * 0.7})`;
+      ctx.fillRect(tx - P * 0.3, torchY + P, P * 0.6, coreH);
+
+      // Glow halo around flame
+      ctx.globalAlpha = alpha * 0.08 * tg;
+      ctx.fillStyle = '#ff8830';
+      ctx.fillRect(tx - P * 6, torchY - P * 4, P * 12, P * 10);
+      ctx.globalAlpha = alpha * 0.04 * tg;
+      ctx.fillRect(tx - P * 10, torchY - P * 6, P * 20, P * 14);
+      ctx.globalAlpha = alpha;
+
+      // Sparks — a couple of tiny pixels rising from flame
+      for (let sp = 0; sp < 2; sp++) {
+        const sparkPhase = frameCount * 0.05 + sp * 4.3 + ti * 7.1;
+        const sparkLife = (sparkPhase % 1.0);
+        const sparkX = tx + Math.sin(sparkPhase * 6.0) * P * 2;
+        const sparkY = torchY - P * 2 - sparkLife * P * 8;
+        ctx.globalAlpha = alpha * (1 - sparkLife) * 0.6 * tg;
+        ctx.fillStyle = '#ffcc44';
+        ctx.fillRect(sparkX, sparkY, P * 0.5, P * 0.5);
+      }
+      ctx.globalAlpha = alpha;
+    }
+
+    // ── Stone foundation ──
+    ctx.fillStyle = '#12100c';
+    ctx.fillRect(hx - P, GROUND_Y - P * 2, houseW + P * 2, P * 2);
+    // Stone texture
+    ctx.fillStyle = '#1a1610';
+    for (let sx = hx; sx < hx + houseW; sx += P * 3) {
+      ctx.fillRect(sx, GROUND_Y - P * 2, P * 2, P);
+    }
+
+    // ── House walls — timber frame style ──
+    // Main wall fill — dark plaster
     ctx.fillStyle = '#110e0a';
-    ctx.fillRect(hx + P, hy + P, houseW - P * 2, houseH - P);
-    // Dark trim edges
-    ctx.fillStyle = '#080604';
-    ctx.fillRect(hx, hy, houseW, P);
-    ctx.fillRect(hx, hy, P, houseH);
-    ctx.fillRect(hx + houseW - P, hy, P, houseH);
+    ctx.fillRect(hx, hy, houseW, wallH);
+    // Slightly lighter interior
+    ctx.fillStyle = '#15110c';
+    ctx.fillRect(hx + P * 2, hy + P * 2, houseW - P * 4, wallH - P * 3);
 
-    // Roof — dark silhouette
-    ctx.fillStyle = '#0a0404';
+    // Timber frame beams — dark wood
+    ctx.fillStyle = '#0d0908';
+    // Vertical beams
+    ctx.fillRect(hx, hy, P * 2, wallH);
+    ctx.fillRect(hx + houseW - P * 2, hy, P * 2, wallH);
+    ctx.fillRect(hx + houseW / 2 - P, hy, P * 2, wallH);
+    // Horizontal beams
+    ctx.fillRect(hx, hy, houseW, P * 2);
+    ctx.fillRect(hx, hy + wallH / 2 - P, houseW, P * 2);
+    // Cross braces in left panel
+    ctx.fillStyle = '#0a0706';
+    const panelL = hx + P * 2;
+    const panelMid = hx + houseW / 2 - P;
+    const panelR = hx + houseW - P * 2;
+    const beamMidY = hy + wallH / 2 - P;
+
+    // ── Roof — steep A-frame with overhang ──
+    const overhang = P * 5;
+    ctx.fillStyle = '#0c0606';
     ctx.beginPath();
-    ctx.moveTo(hx - P * 3, hy);
+    ctx.moveTo(hx - overhang, hy);
     ctx.lineTo(hx + houseW / 2, hy - roofH);
-    ctx.lineTo(hx + houseW + P * 3, hy);
+    ctx.lineTo(hx + houseW + overhang, hy);
     ctx.closePath();
     ctx.fill();
-    // Faint moonlight edge on roof
-    ctx.fillStyle = '#1a0e0e';
+    // Left slope — faint light edge
+    ctx.fillStyle = '#180e0e';
     ctx.beginPath();
-    ctx.moveTo(hx, hy);
+    ctx.moveTo(hx - overhang, hy);
+    ctx.lineTo(hx + houseW / 2, hy - roofH);
     ctx.lineTo(hx + houseW / 2, hy - roofH + P);
-    ctx.lineTo(hx + houseW / 2, hy - roofH);
-    ctx.lineTo(hx - P * 3, hy);
+    ctx.lineTo(hx - overhang + P, hy);
     ctx.closePath();
     ctx.fill();
+    // Roof ridge cap
+    ctx.fillStyle = '#1a0f0a';
+    ctx.fillRect(hx + houseW / 2 - P * 2, hy - roofH - P, P * 4, P);
 
-    // Door — dark recess
-    ctx.fillStyle = '#060404';
-    const doorW = P * 5;
-    const doorH = P * 10;
+    // ── Door — arched top, recessed ──
+    const doorW = P * 6;
+    const doorH = P * 12;
     const doorX = hx + houseW / 2 - doorW / 2;
-    ctx.fillRect(doorX, GROUND_Y - doorH, doorW, doorH);
-    // Faint doorknob
-    ctx.fillStyle = '#2a1e10';
-    ctx.fillRect(doorX + doorW - P * 2, GROUND_Y - doorH / 2, P, P);
+    const doorY = GROUND_Y - doorH;
+    ctx.fillStyle = '#080504';
+    ctx.fillRect(doorX, doorY + P * 2, doorW, doorH - P * 2);
+    // Arch top
+    ctx.beginPath();
+    ctx.arc(doorX + doorW / 2, doorY + P * 2, doorW / 2, Math.PI, 0);
+    ctx.fill();
+    // Door planks — subtle vertical lines
+    ctx.fillStyle = '#0c0806';
+    ctx.fillRect(doorX + doorW / 2 - 1, doorY + P * 2, 1, doorH - P * 2);
+    // Iron handle
+    ctx.fillStyle = '#3a2a18';
+    ctx.fillRect(doorX + doorW - P * 2, doorY + doorH / 2, P, P * 2);
+    // Warm light leaking under door
+    ctx.globalAlpha = alpha * 0.2 * torchGlow;
+    ctx.fillStyle = '#ff9930';
+    ctx.fillRect(doorX + P, GROUND_Y - P, doorW - P * 2, P);
+    ctx.globalAlpha = alpha;
 
-    // ── Candlelight flicker in windows ──
-    // Irregular flicker: combine multiple sine waves for organic feel
-    const flicker1 = Math.sin(frameCount * 0.07) * 0.15;
-    const flicker2 = Math.sin(frameCount * 0.13 + 2.0) * 0.1;
-    const flicker3 = Math.sin(frameCount * 0.31 + 5.0) * 0.08;
-    const candleGlow = Math.max(0.3, 0.55 + flicker1 + flicker2 + flicker3);
-
-    // Window glow — warm candlelight orange
+    // ── Windows with candlelight ──
     const winW = P * 5;
     const winH = P * 5;
-    const winLX = hx + P * 4;
-    const winRX = hx + houseW - P * 9;
-    const winY = hy + P * 6;
+    const winLX = hx + P * 5;
+    const winRX = hx + houseW - P * 10;
+    const winY = hy + P * 5;
 
-    ctx.fillStyle = `rgba(255, 150, 40, ${candleGlow})`;
+    // Window glow — warm candlelight
+    ctx.fillStyle = `rgba(255, 150, 40, ${torchGlow})`;
     ctx.fillRect(winLX, winY, winW, winH);
     ctx.fillRect(winRX, winY, winW, winH);
 
-    // Tiny candle flame silhouette in center of each window
+    // Candle flames in windows
     const flameH = P + Math.sin(frameCount * 0.2) * 1.5;
-    ctx.fillStyle = `rgba(255, 220, 100, ${candleGlow * 0.9})`;
+    ctx.fillStyle = `rgba(255, 220, 100, ${torchGlow * 0.9})`;
     ctx.fillRect(winLX + winW / 2 - 1, winY + winH - P * 2 - flameH, 3, flameH + P);
     ctx.fillRect(winRX + winW / 2 - 1, winY + winH - P * 2 - flameH, 3, flameH + P);
-    // Flame tip — brighter
-    ctx.fillStyle = `rgba(255, 255, 180, ${candleGlow * 0.7})`;
+    // Bright tip
+    ctx.fillStyle = `rgba(255, 255, 180, ${torchGlow * 0.7})`;
     ctx.fillRect(winLX + winW / 2, winY + winH - P * 2 - flameH - 1, 1, 2);
     ctx.fillRect(winRX + winW / 2, winY + winH - P * 2 - flameH - 1, 1, 2);
 
-    // Window light spill on ground
-    ctx.globalAlpha = alpha * 0.15 * candleGlow;
+    // Window light spill trapezoids
+    ctx.globalAlpha = alpha * 0.12 * torchGlow;
     ctx.fillStyle = '#cc8020';
-    // Left window spill
     ctx.beginPath();
     ctx.moveTo(winLX - P, winY + winH);
     ctx.lineTo(winLX + winW + P, winY + winH);
-    ctx.lineTo(winLX + winW + P * 4, GROUND_Y);
-    ctx.lineTo(winLX - P * 4, GROUND_Y);
+    ctx.lineTo(winLX + winW + P * 5, GROUND_Y);
+    ctx.lineTo(winLX - P * 5, GROUND_Y);
     ctx.closePath();
     ctx.fill();
-    // Right window spill
     ctx.beginPath();
     ctx.moveTo(winRX - P, winY + winH);
     ctx.lineTo(winRX + winW + P, winY + winH);
-    ctx.lineTo(winRX + winW + P * 4, GROUND_Y);
-    ctx.lineTo(winRX - P * 4, GROUND_Y);
+    ctx.lineTo(winRX + winW + P * 5, GROUND_Y);
+    ctx.lineTo(winRX - P * 5, GROUND_Y);
     ctx.closePath();
     ctx.fill();
-    // Ground glow pools
-    ctx.globalAlpha = alpha * 0.1 * candleGlow;
-    ctx.fillRect(winLX - P * 3, GROUND_Y, winW + P * 6, P * 3);
-    ctx.fillRect(winRX - P * 3, GROUND_Y, winW + P * 6, P * 3);
     ctx.globalAlpha = alpha;
 
-    // Window frames — dark silhouettes against candlelight
+    // Window frames — dark cross mullions
     ctx.fillStyle = '#080604';
-    // Left window cross
     ctx.fillRect(winLX + winW / 2 - 1, winY, 2, winH);
     ctx.fillRect(winLX, winY + winH / 2 - 1, winW, 2);
-    // Right window cross
     ctx.fillRect(winRX + winW / 2 - 1, winY, 2, winH);
     ctx.fillRect(winRX, winY + winH / 2 - 1, winW, 2);
 
-    // Chimney — dark silhouette
-    ctx.fillStyle = '#080505';
-    ctx.fillRect(hx + houseW - P * 8, hy - roofH + P * 3, P * 4, roofH - P * 3);
-    // Faint smoke wisps
+    // ── Chimney ──
+    ctx.fillStyle = '#0a0606';
+    const chimX = hx + houseW - P * 9;
+    const chimW = P * 4;
+    const chimTop = hy - roofH + P * 4;
+    ctx.fillRect(chimX, chimTop, chimW, hy - chimTop + roofH * 0.3);
+    // Chimney cap
+    ctx.fillStyle = '#0e0a08';
+    ctx.fillRect(chimX - P, chimTop, chimW + P * 2, P);
+    // Smoke wisps
     for (let s = 0; s < 3; s++) {
-      const smokeY = hy - roofH - P * 2 - s * P * 5 + Math.sin(frameCount * 0.018 + s * 2.2) * 5;
-      const smokeX = hx + houseW - P * 6 + Math.sin(frameCount * 0.012 + s * 1.7) * 7;
+      const smokeY = chimTop - P * 3 - s * P * 5 + Math.sin(frameCount * 0.018 + s * 2.2) * 5;
+      const smokeX = chimX + chimW / 2 + Math.sin(frameCount * 0.012 + s * 1.7) * 7;
       const smokeA = 0.06 - s * 0.015;
       ctx.globalAlpha = alpha * smokeA;
       ctx.fillStyle = '#444444';
       ctx.fillRect(smokeX - P, smokeY - P, P * 3, P * 2);
     }
 
-    // Small fence — dark silhouette
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = '#0e0a08';
-    for (let fx = hx - P * 8; fx < hx - P * 1; fx += P * 3) {
-      ctx.fillRect(fx, GROUND_Y - P * 6, P, P * 6);
+    // ── Stone path leading to door ──
+    ctx.globalAlpha = alpha * 0.4;
+    ctx.fillStyle = '#1a1610';
+    const pathCX = doorX + doorW / 2;
+    for (let si = 0; si < 5; si++) {
+      const sy = GROUND_Y + P + si * P * 2;
+      const sw = P * 2 + si * P;
+      ctx.fillRect(pathCX - sw / 2 + ((si * 3) % 3 - 1) * P, sy, sw, P);
     }
-    ctx.fillRect(hx - P * 8, GROUND_Y - P * 5, P * 18, P);
-    ctx.fillRect(hx - P * 8, GROUND_Y - P * 3, P * 18, P);
+
+    // ── Wooden fence (left side) ──
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#120e08';
+    const fenceStartX = hx - P * 8;
+    const fenceEndX = hx - P;
+    for (let fx = fenceStartX; fx < fenceEndX; fx += P * 3) {
+      // Pointed tops
+      ctx.fillRect(fx, GROUND_Y - P * 7, P, P * 7);
+      ctx.fillStyle = '#1a1410';
+      ctx.fillRect(fx, GROUND_Y - P * 8, P, P);
+      ctx.fillStyle = '#120e08';
+    }
+    // Horizontal rails
+    ctx.fillRect(fenceStartX, GROUND_Y - P * 5, fenceEndX - fenceStartX, P);
+    ctx.fillRect(fenceStartX, GROUND_Y - P * 3, fenceEndX - fenceStartX, P);
   }
 
   ctx.globalAlpha = 1;
@@ -4326,6 +4505,48 @@ function drawTransition() {
   ctx.globalAlpha = 1;
 }
 
+// ── HELP OVERLAY ──
+const HELP_LINES = [
+  { label: 'MOVEMENT',     keys: 'A/D  or  \u2190/\u2192' },
+  { label: 'JUMP',         keys: 'SPACE  W  or  \u2191' },
+  { label: 'DOUBLE JUMP',  keys: 'JUMP again mid-air' },
+  { label: 'MUTE',         keys: 'M' },
+  { label: 'VOLUME',       keys: '+  /  \u2013' },
+  { label: 'README',       keys: 'R  (menu only)' },
+  { label: 'HELP',         keys: '?' },
+];
+function drawHelpOverlay() {
+  // Dim background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  ctx.fillRect(0, 0, W, H);
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffcc44';
+  ctx.font = FONT_20B;
+  ctx.fillText('CONTROLS', W / 2, 60);
+  // Key lines
+  const startY = 100;
+  const lineH = 32;
+  for (let i = 0; i < HELP_LINES.length; i++) {
+    const y = startY + i * lineH;
+    // Label (left-aligned)
+    ctx.textAlign = 'right';
+    ctx.font = FONT_10B;
+    ctx.fillStyle = '#88aacc';
+    ctx.fillText(HELP_LINES[i].label, W / 2 - 20, y);
+    // Keys (right-aligned)
+    ctx.textAlign = 'left';
+    ctx.font = FONT_10;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(HELP_LINES[i].keys, W / 2 + 20, y);
+  }
+  // Footer
+  ctx.textAlign = 'center';
+  ctx.font = FONT_8B;
+  ctx.fillStyle = '#666688';
+  ctx.fillText('Press any key to close', W / 2, H - 30);
+}
+
 // ── MAIN DRAW ──
 function draw() {
   ctx.save();
@@ -4418,6 +4639,9 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.globalAlpha = 1;
   }
+
+  // Help overlay (draws on top of everything)
+  if (showHelpOverlay) drawHelpOverlay();
 }
 
 // ── GAME LOOP ──
