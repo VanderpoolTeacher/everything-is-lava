@@ -148,6 +148,71 @@ function getAudioCtx() {
   return audioCtx;
 }
 
+// Cached noise buffers — created once, reused forever
+let _splashBuf = null, _slopBuf = null, _crunchBuf = null, _crackBuf = null, _deathNoiseBuf = null;
+function getSplashBuf(ac) {
+  if (_splashBuf) return _splashBuf;
+  const bufSize = Math.floor(ac.sampleRate * 0.35);
+  _splashBuf = ac.createBuffer(1, bufSize, ac.sampleRate);
+  const data = _splashBuf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) {
+    const t = i / bufSize;
+    const env = (1 - t) * (1 - t);
+    data[i] = ((Math.random() * 2 - 1) * 0.7 + Math.sin(i * 0.02) * 0.3) * env;
+  }
+  return _splashBuf;
+}
+function getSlopBuf(ac) {
+  if (_slopBuf) return _slopBuf;
+  const slopLen = Math.floor(ac.sampleRate * 0.12);
+  _slopBuf = ac.createBuffer(1, slopLen, ac.sampleRate);
+  const data = _slopBuf.getChannelData(0);
+  for (let i = 0; i < slopLen; i++) {
+    const env = Math.pow(1 - i / slopLen, 1.5);
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  return _slopBuf;
+}
+function getCrunchBuf(ac) {
+  if (_crunchBuf) return _crunchBuf;
+  const len = Math.floor(ac.sampleRate * 0.25);
+  _crunchBuf = ac.createBuffer(1, len, ac.sampleRate);
+  const data = _crunchBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const env = Math.pow(1 - i / len, 2);
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  return _crunchBuf;
+}
+function getCrackBuf(ac) {
+  if (_crackBuf) return _crackBuf;
+  const len = Math.floor(ac.sampleRate * 0.15);
+  _crackBuf = ac.createBuffer(1, len, ac.sampleRate);
+  const data = _crackBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const env = Math.pow(1 - i / len, 3);
+    data[i] = (Math.random() > 0.5 ? 1 : -1) * env * (Math.random() > 0.7 ? 1 : 0.2);
+  }
+  return _crackBuf;
+}
+function getDeathNoiseBuf(ac) {
+  if (_deathNoiseBuf) return _deathNoiseBuf;
+  const len = Math.floor(ac.sampleRate * 0.8);
+  _deathNoiseBuf = ac.createBuffer(1, len, ac.sampleRate);
+  const data = _deathNoiseBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1);
+  return _deathNoiseBuf;
+}
+
+// Auto-cleanup helper: disconnects all nodes when source ends
+function autoCleanup(srcNode, allNodes) {
+  srcNode.onended = () => {
+    for (let i = 0; i < allNodes.length; i++) {
+      try { allNodes[i].disconnect(); } catch(e) {}
+    }
+  };
+}
+
 // Fire/ambulance siren — slow warble between two tones
 let sirenOsc = null;
 let sirenGain = null;
@@ -348,40 +413,24 @@ function playLavaSplash() {
   try {
     const ac = getAudioCtx();
     const now = ac.currentTime;
-
-    // Wet sizzle layer — longer, louder
-    const bufSize = Math.floor(ac.sampleRate * 0.35);
-    const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) {
-      const t = i / bufSize;
-      const env = (1 - t) * (1 - t); // quadratic decay
-      // Mix of noise + low rumble for wet slop texture
-      data[i] = ((Math.random() * 2 - 1) * 0.7 + Math.sin(i * 0.02) * 0.3) * env;
-    }
     const src = ac.createBufferSource();
-    src.buffer = buf;
-
-    // Low-pass for thick wet sound
+    src.buffer = getSplashBuf(ac);
     const lpf = ac.createBiquadFilter();
     lpf.type = 'lowpass';
     lpf.frequency.value = 1200;
     lpf.Q.value = 2;
-
-    // Bandpass sizzle layer
     const bpf = ac.createBiquadFilter();
     bpf.type = 'bandpass';
     bpf.frequency.value = 600 + Math.random() * 400;
     bpf.Q.value = 1.2;
-
     const gain = ac.createGain();
     gain.gain.setValueAtTime(0.45, now);
     gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
-
     src.connect(lpf);
     lpf.connect(bpf);
     bpf.connect(gain);
     gain.connect(ac.destination);
+    autoCleanup(src, [src, lpf, bpf, gain]);
     src.start();
   } catch(e) {}
 }
@@ -417,8 +466,7 @@ function playLavaHit() {
   try {
     const ac = getAudioCtx();
     const now = ac.currentTime;
-
-    // Deep impact thud — punchy sub bass
+    // Deep impact thud
     const thud = ac.createOscillator();
     thud.type = 'sine';
     thud.frequency.setValueAtTime(150, now);
@@ -428,19 +476,12 @@ function playLavaHit() {
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
     thud.connect(thudGain);
     thudGain.connect(ac.destination);
+    autoCleanup(thud, [thud, thudGain]);
     thud.start(now);
     thud.stop(now + 0.25);
-
-    // Slop layer — short burst of filtered noise (wet splat)
-    const slopLen = Math.floor(ac.sampleRate * 0.12);
-    const slopBuf = ac.createBuffer(1, slopLen, ac.sampleRate);
-    const slopData = slopBuf.getChannelData(0);
-    for (let i = 0; i < slopLen; i++) {
-      const env = Math.pow(1 - i / slopLen, 1.5);
-      slopData[i] = (Math.random() * 2 - 1) * env;
-    }
+    // Slop layer
     const slopSrc = ac.createBufferSource();
-    slopSrc.buffer = slopBuf;
+    slopSrc.buffer = getSlopBuf(ac);
     const slopFilter = ac.createBiquadFilter();
     slopFilter.type = 'lowpass';
     slopFilter.frequency.value = 400 + Math.random() * 200;
@@ -451,8 +492,8 @@ function playLavaHit() {
     slopSrc.connect(slopFilter);
     slopFilter.connect(slopGain);
     slopGain.connect(ac.destination);
+    autoCleanup(slopSrc, [slopSrc, slopFilter, slopGain]);
     slopSrc.start(now);
-
     // Sizzle tail
     playLavaSplash();
   } catch(e) {}
@@ -463,15 +504,13 @@ function playDeathSound() {
   try {
     const ac = getAudioCtx();
     const now = ac.currentTime;
-
-    // Voice-like "argh" — sawtooth with vibrato
+    // Voice-like "argh"
     const voice = ac.createOscillator();
     voice.type = 'sawtooth';
     voice.frequency.setValueAtTime(400, now);
     voice.frequency.linearRampToValueAtTime(350, now + 0.1);
     voice.frequency.linearRampToValueAtTime(180, now + 0.6);
     voice.frequency.linearRampToValueAtTime(80, now + 1.0);
-
     // Vibrato LFO
     const vibrato = ac.createOscillator();
     vibrato.frequency.value = 6;
@@ -481,21 +520,17 @@ function playDeathSound() {
     vibratoGain.connect(voice.frequency);
     vibrato.start(now);
     vibrato.stop(now + 1.0);
-
-    // Formant-like filter to sound more vocal
+    // Formants
     const formant = ac.createBiquadFilter();
     formant.type = 'bandpass';
     formant.frequency.setValueAtTime(800, now);
     formant.frequency.linearRampToValueAtTime(400, now + 0.8);
     formant.Q.value = 2;
-
-    // Second formant
     const formant2 = ac.createBiquadFilter();
     formant2.type = 'bandpass';
     formant2.frequency.setValueAtTime(1200, now);
     formant2.frequency.linearRampToValueAtTime(600, now + 0.8);
     formant2.Q.value = 1.5;
-
     // Envelope
     const env = ac.createGain();
     env.gain.setValueAtTime(0, now);
@@ -503,13 +538,9 @@ function playDeathSound() {
     env.gain.setValueAtTime(0.15, now + 0.3);
     env.gain.linearRampToValueAtTime(0.08, now + 0.6);
     env.gain.linearRampToValueAtTime(0, now + 1.0);
-
-    // Noise layer for breathiness
-    const noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.8, ac.sampleRate);
-    const nd = noiseBuf.getChannelData(0);
-    for (let i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1);
+    // Noise layer for breathiness (cached buffer)
     const noise = ac.createBufferSource();
-    noise.buffer = noiseBuf;
+    noise.buffer = getDeathNoiseBuf(ac);
     const noiseGain = ac.createGain();
     noiseGain.gain.setValueAtTime(0.04, now);
     noiseGain.gain.linearRampToValueAtTime(0, now + 0.8);
@@ -521,14 +552,14 @@ function playDeathSound() {
     noiseFilter.connect(noiseGain);
     noiseGain.connect(ac.destination);
     noise.start(now);
-
     // Connect voice chain
     voice.connect(formant);
     voice.connect(formant2);
     formant.connect(env);
     formant2.connect(env);
     env.connect(ac.destination);
-
+    // Auto-cleanup when voice ends (longest sound)
+    autoCleanup(voice, [voice, vibrato, vibratoGain, formant, formant2, env, noise, noiseGain, noiseFilter]);
     voice.start(now);
     voice.stop(now + 1.0);
   } catch(e) {}
@@ -743,8 +774,7 @@ function playExplosionSound() {
   try {
     const ac = getAudioCtx();
     const now = ac.currentTime;
-
-    // Deep boom — low sine sweep
+    // Deep boom
     const boom = ac.createOscillator();
     boom.type = 'sine';
     boom.frequency.setValueAtTime(200, now);
@@ -754,19 +784,12 @@ function playExplosionSound() {
     boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
     boom.connect(boomGain);
     boomGain.connect(ac.destination);
+    autoCleanup(boom, [boom, boomGain]);
     boom.start(now);
     boom.stop(now + 0.5);
-
-    // Crunch — burst of distorted noise
-    const crunchLen = Math.floor(ac.sampleRate * 0.25);
-    const crunchBuf = ac.createBuffer(1, crunchLen, ac.sampleRate);
-    const cd = crunchBuf.getChannelData(0);
-    for (let i = 0; i < crunchLen; i++) {
-      const env = Math.pow(1 - i / crunchLen, 2);
-      cd[i] = (Math.random() * 2 - 1) * env;
-    }
+    // Crunch (cached buffer)
     const crunchSrc = ac.createBufferSource();
-    crunchSrc.buffer = crunchBuf;
+    crunchSrc.buffer = getCrunchBuf(ac);
     const crunchFilter = ac.createBiquadFilter();
     crunchFilter.type = 'lowpass';
     crunchFilter.frequency.setValueAtTime(2000, now);
@@ -777,18 +800,11 @@ function playExplosionSound() {
     crunchSrc.connect(crunchFilter);
     crunchFilter.connect(crunchGain);
     crunchGain.connect(ac.destination);
+    autoCleanup(crunchSrc, [crunchSrc, crunchFilter, crunchGain]);
     crunchSrc.start(now);
-
-    // High crackle layer
-    const crackLen = Math.floor(ac.sampleRate * 0.15);
-    const crackBuf = ac.createBuffer(1, crackLen, ac.sampleRate);
-    const ckd = crackBuf.getChannelData(0);
-    for (let i = 0; i < crackLen; i++) {
-      const env = Math.pow(1 - i / crackLen, 3);
-      ckd[i] = (Math.random() > 0.5 ? 1 : -1) * env * (Math.random() > 0.7 ? 1 : 0.2);
-    }
+    // High crackle (cached buffer)
     const crackSrc = ac.createBufferSource();
-    crackSrc.buffer = crackBuf;
+    crackSrc.buffer = getCrackBuf(ac);
     const crackFilter = ac.createBiquadFilter();
     crackFilter.type = 'bandpass';
     crackFilter.frequency.value = 3000;
@@ -799,6 +815,7 @@ function playExplosionSound() {
     crackSrc.connect(crackFilter);
     crackFilter.connect(crackGain);
     crackGain.connect(ac.destination);
+    autoCleanup(crackSrc, [crackSrc, crackFilter, crackGain]);
     crackSrc.start(now);
   } catch(e) {}
 }
