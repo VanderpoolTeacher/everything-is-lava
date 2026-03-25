@@ -31,7 +31,7 @@ Only gameplay-critical references to `GROUND_Y` change for `level === 4`. Render
 - Player ground collision and spawn Y
 - Lava drop ground-hit detection and lava pool spawn Y
 - Tree base positioning
-- Molten rock Y tracking
+- Rock and molten rock Y tracking
 - Player shadow Y position
 
 **Must NOT change:**
@@ -42,20 +42,36 @@ Only gameplay-critical references to `GROUND_Y` change for `level === 4`. Render
 
 ## Hazards
 
-### Molten Rocks
+### Rocks (Physical Obstacles)
 
-Small molten rocks roll downhill from right to left. Only small rocks appear in 2-1 — this introduces the mechanic before later levels add medium/large variants.
+Non-lethal stone boulders that roll downhill from right to left. The primary rolling hazard in 2-1.
 
-- **Size:** ~24px diameter
-- **Speed:** 7–9 px/frame (fast, but jumpable)
-- **Damage:** Instant kill on any contact
+- **Sizes:** Varying — small (~24px), medium (~44px), large (~70px)
+- **Speed:** Inversely proportional to size — small: 7–9 px/f, medium: 5–7 px/f, large: 3–5 px/f
+- **Damage:** Knockback only — pushes the player left. Larger rocks push further (small: 30px, medium: 50px, large: 80px). No life lost.
+- **Visual:** Gray/brown stone, no glow. Pixel-art style to match game aesthetic.
 - **Movement:** Follow terrain slope via `getGroundY()`, rolling left (downhill)
 - **Rotation:** Visual spin animation proportional to speed
-- **Spawn rate:** Very sparse — every ~150 frames in first third, every ~100 in second third, every ~70 in final third
+- **Spawn rate:** Moderate — every ~100 frames in first third, every ~70 in second third, every ~50 in final third
+- **Spawn position:** Right edge of screen, on the ground
+- **Removal:** Roll off left edge of screen
+- **Tree interaction:** Rocks roll on the ground and pass under/through trees
+
+### Molten Rocks (Lethal)
+
+Glowing lava-filled rocks that roll downhill. Rare in 2-1 — a deadly threat the player learns to distinguish from regular rocks.
+
+- **Sizes:** Varying — same size range as rocks (small ~24px, medium ~44px, large ~70px)
+- **Speed:** Same speed ranges as rocks per size
+- **Damage:** Instant kill on any contact
+- **Visual:** Glowing orange/red with lava cracks. Radial gradient from bright orange core to dark red edges. Emits faint glow/light.
+- **Movement:** Follow terrain slope via `getGroundY()`, rolling left (downhill)
+- **Rotation:** Visual spin animation proportional to speed
+- **Spawn rate:** Very sparse — every ~200 frames in first third, every ~150 in second third, every ~100 in final third
 - **Spawn position:** Right edge of screen, on the ground
 - **Removal:** Roll off left edge of screen
 - **Lava trail:** ~5% chance per frame to spawn a small lava pool (half normal pool size) behind the rock
-- **Tree interaction:** Rocks roll on the ground and pass under/through trees (rocks don't directly ignite trees, but their lava trail pools can)
+- **Tree interaction:** Molten rocks roll on the ground and pass under/through trees (don't directly ignite trees, but their lava trail pools can)
 
 ### Lava Rain (Carried Over)
 
@@ -129,21 +145,24 @@ Parallax layers depicting a city destroyed by lava, matching the existing parall
 ### First Third (frames 0–1000)
 - Incline: 15°
 - Lava rain: moderate (every ~40 frames)
-- Rocks: very rare (every ~150 frames)
+- Rocks: moderate (every ~100 frames)
+- Molten rocks: very rare (every ~200 frames)
 - Trees: mostly medium, well-spaced
-- Purpose: player learns the slope and tree mechanics
+- Purpose: player learns the slope, trees, and distinguishes rock types
 
 ### Second Third (frames 1000–2000)
 - Incline: ~20°
 - Lava rain: increasing (every ~30 frames)
-- Rocks: occasional (every ~100 frames)
+- Rocks: frequent (every ~70 frames)
+- Molten rocks: occasional (every ~150 frames)
 - Trees: mixed sizes, some burning from lava
 - Purpose: pressure builds
 
 ### Final Third (frames 2000–3000)
 - Incline: ~25°
 - Lava rain: heavy (every ~20 frames)
-- Rocks: frequent (every ~70 frames)
+- Rocks: heavy (every ~50 frames)
+- Molten rocks: moderate (every ~100 frames)
 - Trees: more tall ones, many burning
 - Purpose: peak difficulty before level end
 
