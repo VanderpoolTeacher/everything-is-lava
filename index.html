@@ -2575,6 +2575,52 @@ function drawStreet() {
   }
 }
 
+function drawVolcanicGround() {
+  const so = scrollOffset;
+  const step = 4; // sample every 4px for performance
+
+  // 1. Filled polygon: ground surface down to canvas bottom
+  ctx.beginPath();
+  ctx.moveTo(0, H); // bottom-left
+  for (let sx = 0; sx <= W; sx += step) {
+    ctx.lineTo(sx, getGroundY(sx + so));
+  }
+  ctx.lineTo(W, H); // bottom-right
+  ctx.closePath();
+  ctx.fillStyle = '#3a2515';
+  ctx.fill();
+
+  // 2. Surface line along the top
+  ctx.beginPath();
+  ctx.moveTo(0, getGroundY(so));
+  for (let sx = step; sx <= W; sx += step) {
+    ctx.lineTo(sx, getGroundY(sx + so));
+  }
+  ctx.strokeStyle = '#5a3a28';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // 3. Animated lava vein cracks
+  const veinCount = 10;
+  for (let i = 0; i < veinCount; i++) {
+    const baseX = i * 120 + 30;
+    const sx = ((baseX - so * 0.6) % (W + 200) + W + 200) % (W + 200) - 100;
+    if (sx < -50 || sx > W + 50) continue;
+
+    const gy = getGroundY(sx + so);
+    const pulse = 0.3 + 0.4 * Math.sin(frameCount * 0.03 + i * 1.7);
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = i % 2 === 0 ? '#ff4500' : '#ff6a00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, gy + 6);
+    ctx.lineTo(sx + 10 + (i % 3) * 5, gy + 14 + (i % 4) * 4);
+    ctx.lineTo(sx + 22 + (i % 2) * 8, gy + 20 + (i % 3) * 6);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
 // Pool depth helper — hoisted out of per-frame loop to avoid closure allocation
 function poolDepthAt(col, totalCols, taperCols, maxDepth) {
   if (col < taperCols) {
@@ -4601,7 +4647,11 @@ function draw() {
     drawBuildingLayer(buildings_mid, 0.3, 0.3);
     drawNeonSigns();
     drawBuildingLayer(buildings_near, 0.5, 0.1);
-    drawStreet();
+    if (level === 4) {
+      drawVolcanicGround();
+    } else {
+      drawStreet();
+    }
     drawStreetLamps();
 
     // Shadow overlay — everything falls into darkness near end of level 3
