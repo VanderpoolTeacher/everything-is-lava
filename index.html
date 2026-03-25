@@ -722,6 +722,40 @@ function generateStreetLamps() {
   }
 }
 
+// ── TREES (world coords, jumpable platforms for level 4) ──
+let trees = [];
+const TREE_SPACING = 250;
+
+function generateTrees() {
+  trees = [];
+  let lastWasTall = false;
+  for (let wx = 200; wx < 10000; wx += TREE_SPACING) {
+    let sizeRoll = Math.random();
+    let size;
+    if (lastWasTall) {
+      size = sizeRoll < 0.4 ? 'small' : 'medium';
+    } else {
+      size = sizeRoll < 0.3 ? 'small' : sizeRoll < 0.8 ? 'medium' : 'tall';
+    }
+    lastWasTall = (size === 'tall');
+    const heights = { small: 80, medium: 135, tall: 180 };
+    const canopyWidths = { small: 40, medium: 55, tall: 65 };
+    const canopyHeights = { small: 20, medium: 28, tall: 35 };
+    const trunkWidths = { small: 8, medium: 12, tall: 16 };
+    trees.push({
+      worldX: wx,
+      size: size,
+      height: heights[size],
+      canopyW: canopyWidths[size],
+      canopyH: canopyHeights[size],
+      trunkW: trunkWidths[size],
+      burning: false,
+      burnTimer: 0,
+      collapsed: false
+    });
+  }
+}
+
 // ── LAVA DROP SPAWNING ──
 // All lava objects use WORLD coordinates (worldX).
 // Screen position = worldX - scrollOffset
@@ -1338,6 +1372,9 @@ function startGame() {
   vehicleDebris = [];
   generateBuildings();
   generateStreetLamps();
+  if (level === 4) {
+    generateTrees();
+  }
 }
 
 function respawnPlayer() {
@@ -3166,6 +3203,88 @@ function drawStreetLamps() {
   }
 }
 
+function drawTrees() {
+  const P = 4; // pixel grid size
+  for (const t of trees) {
+    if (t.collapsed) continue;
+    const sx = t.worldX - scrollOffset;
+    if (sx < -100 || sx > W + 100) continue;
+
+    const baseY = getGroundY(t.worldX);
+    const trunkTop = baseY - t.height;
+    const canopyCenter = trunkTop - t.canopyH / 2;
+
+    // Burn color progression
+    const burnProg = t.burning ? Math.min(t.burnTimer / 210, 1) : 0;
+
+    // ── Trunk ──
+    const trunkR = Math.floor(50 + burnProg * 40);
+    const trunkG = Math.floor(30 - burnProg * 20);
+    const trunkB = Math.floor(15 - burnProg * 10);
+    // Dark side
+    ctx.fillStyle = `rgb(${trunkR - 15},${Math.max(0, trunkG - 10)},${Math.max(0, trunkB - 5)})`;
+    ctx.fillRect(sx - t.trunkW / 2, trunkTop, t.trunkW / 2, t.height);
+    // Light side
+    ctx.fillStyle = `rgb(${trunkR},${Math.max(0, trunkG)},${Math.max(0, trunkB)})`;
+    ctx.fillRect(sx, trunkTop, t.trunkW / 2, t.height);
+
+    // ── Canopy (ellipse) ──
+    let cR, cG, cB;
+    if (!t.burning) {
+      cR = 20 + Math.random() * 5 | 0;
+      cG = 80 + Math.random() * 10 | 0;
+      cB = 20 + Math.random() * 5 | 0;
+    } else {
+      // Transition green -> brown/orange -> red
+      if (burnProg < 0.5) {
+        const p = burnProg * 2;
+        cR = Math.floor(20 + p * 160);
+        cG = Math.floor(80 - p * 40);
+        cB = Math.floor(20 - p * 15);
+      } else {
+        const p = (burnProg - 0.5) * 2;
+        cR = Math.floor(180 + p * 75);
+        cG = Math.floor(40 - p * 30);
+        cB = Math.floor(5);
+      }
+      // Flash in critical phase (last 20%)
+      if (burnProg > 0.8 && frameCount % 6 < 3) {
+        cR = 255; cG = 200; cB = 50;
+      }
+    }
+
+    ctx.fillStyle = `rgb(${cR},${cG},${cB})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, canopyCenter, t.canopyW / 2, t.canopyH / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Canopy highlight
+    ctx.fillStyle = `rgba(${cR + 30},${cG + 20},${cB + 10}, 0.4)`;
+    ctx.beginPath();
+    ctx.ellipse(sx, canopyCenter - t.canopyH * 0.15, t.canopyW * 0.35, t.canopyH * 0.25, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ── Platform highlight (so player can see where to land) ──
+    ctx.fillStyle = 'rgba(255, 255, 200, 0.15)';
+    ctx.fillRect(sx - t.canopyW / 2, trunkTop - t.canopyH, t.canopyW, P);
+
+    // ── Fire particles when burning ──
+    if (t.burning) {
+      const numFlames = Math.min(Math.floor(burnProg * 8) + 2, 8);
+      for (let i = 0; i < numFlames; i++) {
+        const fx = sx + (Math.random() - 0.5) * t.canopyW * 0.8;
+        const fy = canopyCenter - t.canopyH * 0.3 + (Math.random() - 0.5) * t.canopyH * 0.6;
+        const fs = P + Math.random() * P;
+        const fireColors = ['#ff4400', '#ff6600', '#ff8800', '#ffaa00', '#ffcc00'];
+        ctx.fillStyle = fireColors[Math.random() * fireColors.length | 0];
+        ctx.globalAlpha = 0.6 + Math.random() * 0.4;
+        ctx.fillRect(fx - fs / 2, fy - fs - Math.random() * 8, fs, fs);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
 // ── VILLAGE SCENE (end of level 3) ──
 function drawVillage() {
   if (villageProgress <= 0) return;
@@ -4652,7 +4771,11 @@ function draw() {
     } else {
       drawStreet();
     }
-    drawStreetLamps();
+    if (level === 4) {
+      drawTrees();
+    } else {
+      drawStreetLamps();
+    }
 
     // Shadow overlay — everything falls into darkness near end of level 3
     if (villageProgress > 0) {
