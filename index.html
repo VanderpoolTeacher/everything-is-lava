@@ -1543,7 +1543,9 @@ function update() {
 
   // Spawn lava drops - rate increases with level and time
   // Taper off during village transition (lava stops near the village)
-  const dropRate = Math.max(15, 60 - level * 8 - levelTimer * 0.005);
+  const dropRate = level === 4
+    ? Math.max(20, 40 - levelTimer * 0.007)
+    : Math.max(15, 60 - level * 8 - levelTimer * 0.005);
   const lavaChance = villageProgress > 0.5 ? Math.max(0, 1 - (villageProgress - 0.5) * 2) : 1;
   if (frameCount % Math.floor(dropRate) === 0 && Math.random() < lavaChance) {
     spawnLavaDrop();
@@ -2979,6 +2981,19 @@ function drawVolcanicGround() {
     ctx.lineTo(sx + 22 + (i % 2) * 8, gy + 20 + (i % 3) * 6);
     ctx.stroke();
     ctx.globalAlpha = 1;
+  }
+
+  // 4. Smoke wisps rising from the ground
+  for (let i = 0; i < 5; i++) {
+    const hash = ((Math.floor(scrollOffset / 300) + i) * 4391) & 0xFFFF;
+    const wsx = ((hash % W) + W) % W;
+    const wgy = getGroundY(wsx + scrollOffset);
+    const wispY = wgy - 10 - Math.sin(frameCount * 0.02 + i * 1.5) * 15;
+    const walpha = 0.1 + Math.sin(frameCount * 0.015 + i * 2) * 0.05;
+    ctx.fillStyle = `rgba(120, 110, 100, ${walpha})`;
+    ctx.beginPath();
+    ctx.ellipse(wsx, wispY, 8, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
