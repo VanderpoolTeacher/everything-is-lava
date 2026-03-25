@@ -639,6 +639,29 @@ function spawnRock() {
   });
 }
 
+// ── MOLTEN ROCKS (Level 4) ──
+let moltenRocks = [];
+
+function spawnMoltenRock() {
+  const sizeRoll = Math.random();
+  let radius, speed;
+  if (sizeRoll < 0.4) {
+    radius = 12; speed = 7 + Math.random() * 2;
+  } else if (sizeRoll < 0.75) {
+    radius = 22; speed = 5 + Math.random() * 2;
+  } else {
+    radius = 35; speed = 3 + Math.random() * 2;
+  }
+  moltenRocks.push({
+    worldX: scrollOffset + W + 50,
+    radius: radius,
+    speed: speed,
+    rotation: 0,
+    rotationSpeed: speed / radius,
+    glowPhase: Math.random() * Math.PI * 2
+  });
+}
+
 // ── EMERGENCY VEHICLES ──
 let vehicles = [];
 
@@ -811,7 +834,7 @@ function spawnLavaDrop() {
   }, 800);
 }
 
-function spawnLavaPool(worldX) {
+function spawnLavaPool(worldX, small) {
   // Check if there's already a pool nearby - merge
   for (const pool of lavaPools) {
     if (Math.abs(pool.worldX - worldX) < pool.w * 0.6) {
@@ -821,12 +844,15 @@ function spawnLavaPool(worldX) {
       return;
     }
   }
+  const poolW = small ? 20 + Math.random() * 15 : 40 + Math.random() * 30;
+  const poolLife = small ? 200 + Math.random() * 100 : 400 + Math.random() * 200;
+  const poolMaxLife = small ? 300 : 600;
   lavaPools.push({
     worldX: worldX,
-    w: 40 + Math.random() * 30,
+    w: poolW,
     h: 8,
-    life: 400 + Math.random() * 200,
-    maxLife: 600,
+    life: poolLife,
+    maxLife: poolMaxLife,
     intensity: 0.8,
     waveOffset: Math.random() * 6.28
   });
@@ -1303,6 +1329,7 @@ function clearGameState() {
   warningMarkers = [];
   vehicles = [];
   rocks = [];
+  moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
   shakeTimer = 0;
@@ -1395,6 +1422,7 @@ function startGame() {
   warningMarkers = [];
   vehicles = [];
   rocks = [];
+  moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
   generateBuildings();
@@ -1867,6 +1895,44 @@ function update() {
           rocks.splice(i, 1);
           continue;
         }
+      }
+    }
+  }
+
+  // Molten rocks (level 4)
+  if (level === 4) {
+    const progress = levelTimer / levelDuration;
+    let moltenRate;
+    if (progress < 0.33) moltenRate = 200;
+    else if (progress < 0.66) moltenRate = 150;
+    else moltenRate = 100;
+    if ((levelTimer + 50) % moltenRate === 0) spawnMoltenRock();
+
+    for (let i = moltenRocks.length - 1; i >= 0; i--) {
+      const mr = moltenRocks[i];
+      mr.worldX -= mr.speed;
+      mr.rotation += mr.rotationSpeed;
+      mr.glowPhase += 0.1;
+      // Remove if off screen left
+      if (mr.worldX < scrollOffset - 100) {
+        moltenRocks.splice(i, 1);
+        continue;
+      }
+      // Lava trail — 5% chance per frame
+      if (Math.random() < 0.05) {
+        spawnLavaPool(mr.worldX, true);
+      }
+      // Player collision — INSTANT KILL
+      const sx = mr.worldX - scrollOffset;
+      const cy = getGroundY(mr.worldX) - mr.radius;
+      const px = player.x + player.w / 2;
+      const py = player.y + player.h / 2;
+      const dx = px - sx;
+      const dy = py - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < mr.radius + player.w / 3) {
+        die();
+        return;
       }
     }
   }
@@ -4926,6 +4992,48 @@ function drawRocks() {
   }
 }
 
+function drawMoltenRocks() {
+  for (const mr of moltenRocks) {
+    const sx = mr.worldX - scrollOffset;
+    if (sx < -50 || sx > W + 50) continue;
+    const cy = getGroundY(mr.worldX) - mr.radius;
+    ctx.save();
+    ctx.translate(sx, cy);
+    ctx.rotate(mr.rotation);
+    // Glow effect
+    const glowIntensity = 10 + Math.sin(mr.glowPhase) * 6;
+    ctx.shadowColor = '#ff6600';
+    ctx.shadowBlur = glowIntensity;
+    // Main body — radial gradient
+    const grad = ctx.createRadialGradient(0, 0, mr.radius * 0.1, 0, 0, mr.radius);
+    grad.addColorStop(0, '#ffaa00');
+    grad.addColorStop(0.5, '#cc4400');
+    grad.addColorStop(1, '#661100');
+    ctx.beginPath();
+    ctx.arc(0, 0, mr.radius, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    // Lava crack lines
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-mr.radius * 0.4, -mr.radius * 0.1);
+    ctx.lineTo(mr.radius * 0.05, mr.radius * 0.35);
+    ctx.lineTo(mr.radius * 0.35, mr.radius * 0.05);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mr.radius * 0.15, -mr.radius * 0.45);
+    ctx.lineTo(-mr.radius * 0.15, -mr.radius * 0.05);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-mr.radius * 0.1, mr.radius * 0.2);
+    ctx.lineTo(mr.radius * 0.3, mr.radius * 0.35);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── MAIN DRAW ──
 function draw() {
   ctx.save();
@@ -4964,6 +5072,7 @@ function draw() {
       drawStreetLamps();
     }
     if (level === 4) drawRocks();
+    if (level === 4) drawMoltenRocks();
 
     // Shadow overlay — everything falls into darkness near end of level 3
     if (villageProgress > 0) {
