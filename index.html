@@ -1750,6 +1750,60 @@ function update() {
     }
   }
 
+  // Lava-tree contact detection (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.burning || t.collapsed) continue;
+      const tsx = t.worldX - scrollOffset;
+      const baseY = getGroundY(t.worldX);
+      const treeTop = baseY - t.height - t.canopyH;
+      // Check lava drops
+      for (const d of lavaDrops) {
+        const dsx = d.worldX - scrollOffset;
+        if (Math.abs(dsx - tsx) < t.canopyW / 2 + 10 && d.y >= treeTop && d.y <= baseY) {
+          t.burning = true;
+          break;
+        }
+      }
+      // Check lava pools under the tree
+      if (!t.burning) {
+        for (const p of lavaPools) {
+          const psx = p.worldX - scrollOffset;
+          if (Math.abs(psx - tsx) < (p.w / 2 + t.trunkW / 2)) {
+            t.burning = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Burn timer update (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.burning && !t.collapsed) {
+        t.burnTimer++;
+        if (t.burnTimer >= 210) {
+          t.collapsed = true;
+          // Ember particles
+          const tsx = t.worldX - scrollOffset;
+          const baseY = getGroundY(t.worldX);
+          for (let i = 0; i < 8; i++) {
+            particles.push({
+              x: tsx + (Math.random() - 0.5) * t.canopyW,
+              y: baseY - t.height - Math.random() * t.canopyH,
+              vx: (Math.random() - 0.5) * 2,
+              vy: -1 - Math.random() * 2,
+              life: 60 + Math.random() * 40,
+              maxLife: 100,
+              color: `rgb(255, ${100 + Math.random() * 100 | 0}, 0)`
+            });
+          }
+        }
+      }
+    }
+  }
+
   // Update warning markers (world coords)
   for (let i = warningMarkers.length - 1; i >= 0; i--) {
     warningMarkers[i].life--;
