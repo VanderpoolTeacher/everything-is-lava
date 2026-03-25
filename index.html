@@ -78,6 +78,8 @@ let flashTimer = 0;
 let scrollOffset = 0;
 let villageProgress = 0; // 0 = city, 1 = full village (level 3 ending)
 let gameOverScrollDone = false;
+let storyScrollY = 0;       // scroll position for inter-level story
+let storyScrollDone = false; // true when story scroll finishes
 let deathTimer = 0; // frames since death, used for animation + restart delay
 const DEATH_RESTART_DELAY = 180; // ~3 seconds at 60fps
 
@@ -96,6 +98,16 @@ const titleImg = new Image();
 titleImg.src = 'assets/everything-is-lava-title.png';
 let titleReady = false;
 titleImg.onload = function() { titleReady = true; };
+
+const emeraldImg = new Image();
+emeraldImg.src = 'assets/hooded-figure-green-emerald-transparent.png';
+let emeraldReady = false;
+emeraldImg.onload = function() { emeraldReady = true; };
+
+const ggdImg = new Image();
+ggdImg.src = 'assets/ggd-clean.png';
+let ggdReady = false;
+ggdImg.onload = function() { ggdReady = true; };
 
 // ── MASTER VOLUME ──
 let masterVolume = 0.5;
@@ -126,6 +138,19 @@ const dojoTracks = [
 dojoTracks.forEach(t => { t.loop = true; t.volume = 0.4; });
 let dojoTrackIdx = 0;
 function getDojoMusic() { return dojoTracks[dojoTrackIdx]; }
+
+// Dojo practice toggles
+let dojoBirdsOn = false;
+let dojoBirds = [];       // { x, y, vx, frame, timer }
+let dojoWaterOn = false;
+let dojoWaterDrops = [];   // { x, y, vy, size }
+let dojoStunTimer = 0;     // >0 = hero is stunned (can't move)
+let dojoDodgeCount = 0;    // how many hazards dodged (passed offscreen or hit ground)
+let dojoHitCount = 0;      // how many times hit
+let dojoTrialOn = false;   // T key — timed trial with ramping difficulty
+let dojoTrialTimer = 0;    // frames elapsed in trial
+let dojoTrialDuration = 1800 + 3 * 300; // same as level 3 duration (2700 frames = 45 sec)
+let dojoTrialScore = 0;    // score during trial
 
 const titleMusic = new Audio('assets/music/title-screen.mp3');
 titleMusic.loop = true;
@@ -584,7 +609,8 @@ const player = {
   kicking: false,   // kick state
   kickTimer: 0,     // frames into kick animation
   facingRight: true, // last horizontal direction faced
-  idleTimer: 0       // frames since last movement input
+  idleTimer: 0,      // frames since last movement input
+  crouching: false    // crouch state (down arrow / S key while grounded)
 };
 
 // ── LAVA SYSTEMS ──
@@ -600,12 +626,13 @@ function spawnVehicle(forceType, forceLadder) {
   const types = ['firetruck', 'ambulance', 'police'];
   const type = forceType || types[Math.random() * types.length | 0];
   const isSchoolBus = type === 'schoolbus';
-  const speed = isSchoolBus ? 4 + Math.random() * 2 : 5 + Math.random() * 4;
+  const isPolice = type === 'police';
+  const speed = isSchoolBus ? 4 + Math.random() * 2 : isPolice ? 6.75 + Math.random() * 5.4 : 5 + Math.random() * 4;
   const offscreenDist = 350;
   const vw = isSchoolBus ? 240 : 180;
   const vh = isSchoolBus ? 80 : 64;
-  // 10% chance of ladder-extended firetruck on level 2+, or forced
-  const ladderUp = forceLadder || (type === 'firetruck' && level >= 2 && Math.random() < 0.1);
+  // All firetrucks in levels 1-1 and 1-2 have ladders; level 1-3 no ladders (destroyed by lava)
+  const ladderUp = forceLadder || (type === 'firetruck' && level <= 2);
   vehicles.push({
     x: W + offscreenDist,
     dir: -1, // always from right
@@ -1033,6 +1060,16 @@ window.addEventListener('keydown', e => {
     return;
   }
 
+  // Q key — reset game back to title menu
+  if (e.code === 'KeyQ') {
+    clearGameState();
+    gameState = 'menu';
+    menuScrollY = -480;
+    titleMusic.currentTime = 0;
+    titleMusic.play().catch(() => {});
+    return;
+  }
+
   // ? key (Slash with Shift) — toggle help overlay
   if (e.code === 'Slash') {
     showHelpOverlay = !showHelpOverlay;
@@ -1089,7 +1126,29 @@ window.addEventListener('keydown', e => {
       levelMusic.play().catch(() => {});
       return;
     }
-    // Any non-number key cancels konami
+    // S key — jump to story scroll (end of 1-3)
+    if (e.code === 'KeyS') {
+      konamiActive = false;
+      konamiUsed = true;
+      // Stop all audio
+      levelMusic.pause(); levelMusic.currentTime = 0;
+      titleMusic.pause(); titleMusic.currentTime = 0;
+      gameOverMusic.pause(); gameOverMusic.currentTime = 0;
+      dojoTracks.forEach(t => { t.pause(); t.currentTime = 0; });
+      stopSiren(); stopPoliceSiren(); stopBusScream(); stopBuzz();
+      // Set up victory/story scroll state
+      level = 3;
+      score = 0;
+      lives = MAX_LIVES;
+      gameState = 'victory';
+      storyScrollY = 0;
+      storyScrollDone = false;
+      deathTimer = 0;
+      victoryMusic.currentTime = 0;
+      victoryMusic.play().catch(() => {});
+      return;
+    }
+    // Any non-number/S key cancels konami
     konamiActive = false;
     // fall through to normal input handling
   }
@@ -1112,15 +1171,20 @@ window.addEventListener('keydown', e => {
     return; // absorb this input — just start the music
   }
 
-  // ── G-G-D sequence detection on menu screen ──
+  // ── G-G-D / O-G sequence detection on menu screen ──
   if (gameState === 'menu') {
     const key = e.code;
-    if (key === 'KeyG' || key === 'KeyD') {
-      dojoKeyBuffer += key === 'KeyG' ? 'g' : 'd';
+    if (key === 'KeyG' || key === 'KeyD' || key === 'KeyO') {
+      dojoKeyBuffer += key === 'KeyG' ? 'g' : key === 'KeyD' ? 'd' : 'o';
       dojoKeyTimer = 60; // reset timeout
       if (dojoKeyBuffer.endsWith('ggd')) {
         enterDojo();
         dojoKeyBuffer = '';
+        return;
+      }
+      if (dojoKeyBuffer.endsWith('og')) {
+        dojoKeyBuffer = '';
+        window.location.href = 'index-og.html';
         return;
       }
       // Keep only last 3 chars
@@ -1140,8 +1204,8 @@ window.addEventListener('keydown', e => {
     } else if (gameState === 'gameover' && gameOverScrollDone) {
       // Full restart from game over — only after scroll completes
       startGame();
-    } else if (gameState === 'victory' && victoryScrollDone) {
-      // Full restart after victory scroll completes
+    } else if (gameState === 'victory' && storyScrollDone) {
+      // Full restart after story scroll completes
       clearGameState();
       gameState = 'menu';
       menuScrollY = -480;
@@ -1164,12 +1228,53 @@ window.addEventListener('keydown', e => {
     return;
   }
 
-  // M key — switch dojo music track
-  if (e.code === 'KeyM' && gameState === 'dojo') {
+  // N key — switch dojo music track
+  if (e.code === 'KeyN' && gameState === 'dojo') {
     getDojoMusic().pause();
     dojoTrackIdx = (dojoTrackIdx + 1) % dojoTracks.length;
     getDojoMusic().currentTime = 0;
     getDojoMusic().play().catch(() => {});
+    return;
+  }
+
+  // I key — toggle dojo birds
+  if (e.code === 'KeyI' && gameState === 'dojo') {
+    dojoBirdsOn = !dojoBirdsOn;
+    if (!dojoBirdsOn) dojoBirds = [];
+    dojoDodgeCount = 0; dojoHitCount = 0;
+    return;
+  }
+
+  // O key — toggle dojo water drops
+  if (e.code === 'KeyO' && gameState === 'dojo') {
+    dojoWaterOn = !dojoWaterOn;
+    if (!dojoWaterOn) dojoWaterDrops = [];
+    dojoDodgeCount = 0; dojoHitCount = 0;
+    return;
+  }
+
+  // T key — start/stop timed trial (birds + water, ramping difficulty, scored)
+  if (e.code === 'KeyT' && gameState === 'dojo') {
+    if (dojoTrialOn) {
+      // Stop trial
+      dojoTrialOn = false;
+      dojoBirdsOn = false;
+      dojoWaterOn = false;
+      dojoBirds = [];
+      dojoWaterDrops = [];
+    } else {
+      // Start trial
+      dojoTrialOn = true;
+      dojoBirdsOn = true;
+      dojoWaterOn = true;
+      dojoBirds = [];
+      dojoWaterDrops = [];
+      dojoTrialTimer = 0;
+      dojoTrialScore = 0;
+      dojoDodgeCount = 0;
+      dojoHitCount = 0;
+    }
+    return;
   }
 
   // Kick removed from arrow/movement keys
@@ -1186,7 +1291,7 @@ canvas.addEventListener('touchstart', e => {
     return;
   }
   if (gameState === 'transition') return;
-  if (gameState === 'victory' && !victoryScrollDone) return;
+  if (gameState === 'victory' && !storyScrollDone) return;
   if (gameState === 'victory') { clearGameState(); gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
   if (gameState === 'dead' && deathTimer < DEATH_RESTART_DELAY) return;
   if (gameState === 'gameover' && !gameOverScrollDone) return;
@@ -1204,7 +1309,7 @@ canvas.addEventListener('mousedown', () => {
     return;
   }
   if (gameState === 'transition') return;
-  if (gameState === 'victory' && !victoryScrollDone) return;
+  if (gameState === 'victory' && !storyScrollDone) return;
   if (gameState === 'victory') { clearGameState(); gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
   if (gameState === 'dead' && deathTimer < DEATH_RESTART_DELAY) return;
   if (gameState === 'gameover' && !gameOverScrollDone) return;
@@ -1339,12 +1444,15 @@ function respawnPlayer() {
   player.kickTimer = 0;
   player.facingRight = true;
   player.idleTimer = 0;
+  player.crouching = false;
+  player.h = SPRITE_H;
   player.invincible = 120; // ~2 seconds of invincibility
   // Clear immediate threats near player
   lavaDrops = [];
   warningMarkers = [];
-  // Restore music volume
-  levelMusic.volume = 0.5;
+  // Restore music volume (respect master volume)
+  const v = muted ? 0 : masterVolume;
+  levelMusic.volume = 0.5 * v;
   levelMusic.play().catch(() => {});
 }
 
@@ -1381,19 +1489,17 @@ function update() {
       stopBuzz();
       // Life bonus: 1000 per life, 10000 if all 5
       const lifeBonus = konamiUsed ? 0 : (lives >= MAX_LIVES ? 10000 : lives * 1000);
-      victoryBaseScore = konamiUsed ? 0 : score;
-      victoryLifeBonus = lifeBonus;
       if (!konamiUsed) score += lifeBonus;
-      // Beat the game!
+      // Beat the game — show emerald story scroll
       gameState = 'victory';
-      victoryScrollDone = false;
-      victoryLegendCache = buildVictoryLegend();
+      storyScrollY = 0;
+      storyScrollDone = false;
       deathTimer = 0;
       victoryMusic.currentTime = 0;
       victoryMusic.play().catch(() => {});
     } else {
       // Skip straight to next level
-      gameState = 'levelComplete'; // set so startGame() knows to advance
+      gameState = 'levelComplete';
       startGame();
     }
     return;
@@ -1410,8 +1516,13 @@ function update() {
     spawnLavaDrop();
   }
 
-  // Handle jump
+  // Handle jump — uncrouch first if needed
   if (jumpBuffered) {
+    if (player.crouching) {
+      player.crouching = false;
+      player.h = SPRITE_H;
+      player.y = GROUND_Y - player.h;
+    }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
       player.grounded = false;
@@ -1442,6 +1553,18 @@ function update() {
   // Track facing direction
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
+
+  // Crouch — down arrow or S while grounded
+  const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
+  if (wantCrouch && !player.crouching) {
+    player.crouching = true;
+    player.h = Math.floor(SPRITE_H * 0.5);
+    player.y = GROUND_Y - player.h; // stay on ground
+  } else if (!wantCrouch && player.crouching) {
+    player.crouching = false;
+    player.h = SPRITE_H;
+    player.y = GROUND_Y - player.h;
+  }
 
   // Idle detection — drop lava on player if they don't move for ~1 second
   const isMoving = moveX !== 0 || !player.grounded || player.kicking;
@@ -1535,13 +1658,15 @@ function update() {
     const cosA = Math.cos(ladderAngle);
     const sinA = Math.sin(ladderAngle);
 
-    // Check several points along the ladder as mini-platforms
+    // Check several points along the ladder as mini-platforms (top = stand, side = hurt)
+    let landedOnLadder = false;
     for (let t = 0.15; t <= 1.0; t += 0.1) {
       const px = ladderBaseX + cosA * ladderLen * t;
       const py = ladderBaseY + sinA * ladderLen * t;
       const platW = 16; // hitbox width at each sample point
       const platH = 8;  // hitbox thickness
 
+      // Platform (top) — land on it when falling
       if (
         player.vy >= 0 &&
         player.x + player.w > px - platW / 2 &&
@@ -1556,7 +1681,28 @@ function update() {
         player.doubleJumped = false;
         // Move player with the truck
         player.x += v.speed * v.dir;
+        landedOnLadder = true;
         break;
+      }
+    }
+
+    // Side hurtbox — running into the ladder from the side kills you
+    if (!landedOnLadder) {
+      for (let t = 0.2; t <= 0.9; t += 0.15) {
+        const px = ladderBaseX + cosA * ladderLen * t;
+        const py = ladderBaseY + sinA * ladderLen * t;
+        const hurtW = 10;
+        const hurtH = 14;
+        // Check horizontal overlap + vertical overlap (player center vs ladder point)
+        if (
+          player.x + player.w > px - hurtW / 2 &&
+          player.x < px + hurtW / 2 &&
+          player.y + player.h > py - hurtH / 2 &&
+          player.y < py + hurtH / 2
+        ) {
+          die();
+          return;
+        }
       }
     }
   }
@@ -1870,6 +2016,8 @@ let deathAnimActive = false;
 
 function die() {
   if (player.invincible > 0) return; // invincibility frames active
+  player.crouching = false;
+  player.h = SPRITE_H;
   lives--;
   player.alive = false;
   stopSiren();
@@ -1904,7 +2052,7 @@ function die() {
   } else {
     // Still have lives — brief death, then respawn
     gameState = 'dead';
-    levelMusic.volume = 0.25; // dim music during death
+    levelMusic.volume = 0.25 * (muted ? 0 : masterVolume); // dim music during death
   }
 }
 
@@ -1932,11 +2080,49 @@ function enterDojo() {
   player.facingRight = true;
   scrollOffset = 0;
   particles = [];
+  dojoBirds = [];
+  dojoWaterDrops = [];
+  dojoBirdsOn = false;
+  dojoWaterOn = false;
+  dojoStunTimer = 0;
+  dojoDodgeCount = 0;
+  dojoHitCount = 0;
+  dojoTrialOn = false;
+  dojoTrialTimer = 0;
+  dojoTrialScore = 0;
 }
 
 function updateDojo() {
+  // Stun countdown
+  if (dojoStunTimer > 0) {
+    dojoStunTimer--;
+    // During stun: still apply gravity but no input
+    player.vy += GRAVITY;
+    player.y += player.vy;
+    if (player.y + player.h >= GROUND_Y) {
+      player.y = GROUND_Y - player.h;
+      player.vy = 0;
+      player.grounded = true;
+      player.jumping = false;
+      player.doubleJumped = false;
+    }
+    // Stun visual shake
+    player.x += (Math.random() - 0.5) * 3;
+    player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+    jumpBuffered = false;
+    // Still update birds/water while stunned
+    updateDojoBirds();
+    updateDojoWater();
+    return;
+  }
+
   // Same movement as main game but no lava, no vehicles, no scrolling
   if (jumpBuffered) {
+    if (player.crouching) {
+      player.crouching = false;
+      player.h = SPRITE_H;
+      player.y = GROUND_Y - player.h;
+    }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
       player.grounded = false;
@@ -1964,6 +2150,18 @@ function updateDojo() {
 
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
+
+  // Crouch — down arrow or S while grounded
+  const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
+  if (wantCrouch && !player.crouching) {
+    player.crouching = true;
+    player.h = Math.floor(SPRITE_H * 0.5);
+    player.y = GROUND_Y - player.h;
+  } else if (!wantCrouch && player.crouching) {
+    player.crouching = false;
+    player.h = SPRITE_H;
+    player.y = GROUND_Y - player.h;
+  }
 
   if (player.kicking) {
     player.kickTimer++;
@@ -2038,6 +2236,108 @@ function updateDojo() {
     p.y += p.vy;
     p.life--;
     if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Trial mode — advance timer, ramp difficulty, track score
+  if (dojoTrialOn) {
+    dojoTrialTimer++;
+    // Score: +1 per frame survived without being stunned
+    if (dojoStunTimer <= 0) dojoTrialScore++;
+    // End trial when time runs out
+    if (dojoTrialTimer >= dojoTrialDuration) {
+      dojoTrialOn = false;
+      // Leave birds/water on so player sees final state, but stop spawning
+      dojoBirdsOn = false;
+      dojoWaterOn = false;
+    }
+  }
+
+  // Update birds & water, check collisions
+  updateDojoBirds();
+  updateDojoWater();
+}
+
+function dojoStun() {
+  if (dojoStunTimer > 0) return; // already stunned
+  dojoHitCount++;
+  dojoStunTimer = 30; // ~0.5 second stun
+  player.vy = -4; // small knockback hop
+  player.grounded = false;
+  spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 8, 3);
+}
+
+function updateDojoBirds() {
+  if (!dojoBirdsOn) return;
+  // Spawn rate: ramps from every 60 frames down to every 20 during trial
+  const trialProgress = dojoTrialOn ? dojoTrialTimer / dojoTrialDuration : 0;
+  const birdRate = Math.max(20, Math.floor(60 - trialProgress * 40));
+  if (frameCount % birdRate === 0) {
+    const birdY = 60 + Math.random() * (GROUND_Y - 120);
+    const speedBonus = trialProgress * 3; // birds get faster during trial
+    const speed = 3 + Math.random() * 3 + speedBonus;
+    dojoBirds.push({ x: W + 20, y: birdY, vx: -speed, frame: 0, timer: 0, w: 24, h: 16 });
+  }
+  for (let i = dojoBirds.length - 1; i >= 0; i--) {
+    const b = dojoBirds[i];
+    b.x += b.vx;
+    b.timer++;
+    if (b.timer % 8 === 0) b.frame = (b.frame + 1) % 4;
+    // Wave motion
+    b.y += Math.sin(b.timer * 0.08) * 0.5;
+    // Remove offscreen — dodged
+    if (b.x < -40) { dojoDodgeCount++; dojoBirds.splice(i, 1); continue; }
+    // Collision with player
+    if (dojoStunTimer <= 0 &&
+        b.x < player.x + player.w &&
+        b.x + b.w > player.x &&
+        b.y < player.y + player.h &&
+        b.y + b.h > player.y) {
+      dojoStun();
+      dojoBirds.splice(i, 1);
+    }
+  }
+}
+
+function updateDojoWater() {
+  if (!dojoWaterOn) return;
+  // Spawn rate: ramps from every 25 frames down to every 10 during trial
+  const trialProgress = dojoTrialOn ? dojoTrialTimer / dojoTrialDuration : 0;
+  const waterRate = Math.max(10, Math.floor(25 - trialProgress * 15));
+  if (frameCount % waterRate === 0) {
+    const dx = 30 + Math.random() * (W - 60);
+    const speedBonus = trialProgress * 2;
+    const spd = 2 + Math.random() * 3 + speedBonus;
+    const sz = 3 + Math.random() * 3;
+    dojoWaterDrops.push({ x: dx, y: -10, vy: 0, size: sz, warn: 40, speed: spd });
+    // warn > 0: drop is invisible, floor flashes. When warn hits 0, drop starts falling.
+  }
+  // Update warnings and drops
+
+  for (let i = dojoWaterDrops.length - 1; i >= 0; i--) {
+    const d = dojoWaterDrops[i];
+    // Warning phase — drop hasn't started falling yet
+    if (d.warn > 0) {
+      d.warn--;
+      if (d.warn === 0) d.vy = d.speed; // start falling
+      continue;
+    }
+    d.vy += 0.15; // gravity
+    d.y += d.vy;
+    // Hit the ground — dodged, splash and remove
+    if (d.y >= GROUND_Y) {
+      dojoDodgeCount++;
+      spawnParticles(d.x, GROUND_Y, '#44aaff', 4, 2);
+      dojoWaterDrops.splice(i, 1);
+      continue;
+    }
+    // Collision with player
+    if (dojoStunTimer <= 0 &&
+        d.x > player.x && d.x < player.x + player.w &&
+        d.y > player.y && d.y < player.y + player.h) {
+      dojoStun();
+      spawnParticles(d.x, d.y, '#44aaff', 6, 3);
+      dojoWaterDrops.splice(i, 1);
+    }
   }
 }
 
@@ -2203,8 +2503,100 @@ function drawDojo() {
   }
   ctx.globalAlpha = 1;
 
+  // ── Draw birds ──
+  for (let i = 0; i < dojoBirds.length; i++) {
+    const b = dojoBirds[i];
+    const bx = Math.floor(b.x);
+    const by = Math.floor(b.y);
+    const wingUp = b.frame < 2;
+    // Body
+    ctx.fillStyle = '#334455';
+    ctx.fillRect(bx, by + P, P * 5, P * 2);
+    // Head
+    ctx.fillStyle = '#445566';
+    ctx.fillRect(bx, by + P, P * 2, P * 2);
+    // Eye
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(bx + P, by + P, P, P);
+    // Beak
+    ctx.fillStyle = '#ffaa44';
+    ctx.fillRect(bx - P, by + P * 2, P, P);
+    // Wings
+    ctx.fillStyle = '#556677';
+    if (wingUp) {
+      ctx.fillRect(bx + P, by - P, P * 3, P);
+      ctx.fillRect(bx + P * 2, by - P * 2, P * 2, P);
+    } else {
+      ctx.fillRect(bx + P, by + P * 3, P * 3, P);
+      ctx.fillRect(bx + P * 2, by + P * 4, P * 2, P);
+    }
+    // Tail
+    ctx.fillStyle = '#445566';
+    ctx.fillRect(bx + P * 5, by, P * 2, P);
+    ctx.fillRect(bx + P * 5, by + P, P, P);
+  }
+
+  // ── Draw water drop floor warnings + drops ──
+  for (let i = 0; i < dojoWaterDrops.length; i++) {
+    const d = dojoWaterDrops[i];
+    if (d.warn > 0) {
+      // Floor warning — style depends on trial mode
+      if (dojoTrialOn) {
+        // Trial: quick white flash, only visible in last 12 frames of warning
+        if (d.warn <= 12) {
+          const flash = d.warn <= 6 ? (d.warn / 6) : (1 - (d.warn - 6) / 6);
+          ctx.globalAlpha = flash * 0.8;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(d.x - 6, GROUND_Y - P * 2, 12, P);
+          ctx.globalAlpha = flash * 0.2;
+          ctx.fillRect(d.x - 14, GROUND_Y - P * 3, 28, P * 3);
+          ctx.globalAlpha = 1;
+        }
+      } else {
+        // Practice: slow pulsing blue indicator
+        const pulse = Math.sin(d.warn * 0.4) * 0.3 + 0.5;
+        const warnRadius = 10 + (40 - d.warn) * 0.3;
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#44aaff';
+        ctx.fillRect(d.x - warnRadius, GROUND_Y - P * 2, warnRadius * 2, P);
+        ctx.fillRect(d.x - warnRadius * 0.6, GROUND_Y - P * 3, warnRadius * 1.2, P);
+        ctx.globalAlpha = pulse * 0.15;
+        ctx.fillRect(d.x - warnRadius * 1.5, GROUND_Y - P * 4, warnRadius * 3, P * 4);
+        ctx.globalAlpha = 1;
+      }
+      continue; // don't draw the drop yet
+    }
+    const s = d.size;
+    // Teardrop shape
+    ctx.fillStyle = '#66bbee';
+    ctx.fillRect(d.x - s * 0.3, d.y, s * 0.6, s);
+    ctx.fillStyle = '#88ddff';
+    ctx.fillRect(d.x - s * 0.15, d.y + s * 0.2, s * 0.3, s * 0.4);
+    // Highlight
+    ctx.fillStyle = '#aaeeff';
+    ctx.fillRect(d.x - s * 0.1, d.y + s * 0.1, s * 0.15, s * 0.25);
+  }
+
+  // ── Draw stun stars ──
+  if (dojoStunTimer > 0) {
+    for (let s = 0; s < 3; s++) {
+      const angle = frameCount * 0.15 + s * (Math.PI * 2 / 3);
+      const sx = player.x + player.w / 2 + Math.cos(angle) * 16;
+      const sy = player.y - 6 + Math.sin(angle) * 6;
+      ctx.fillStyle = '#ffff44';
+      ctx.fillRect(sx - 2, sy - 2, P, P);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(sx - 1, sy - 1, 2, 2);
+    }
+  }
+
   // ── Draw player ──
+  // Flash player during stun
+  if (dojoStunTimer > 0 && Math.floor(frameCount / 3) % 2 === 0) {
+    ctx.globalAlpha = 0.4;
+  }
   drawPlayer();
+  ctx.globalAlpha = 1;
 
   // ── Draw particles ──
   particles.forEach(p => {
@@ -2224,12 +2616,77 @@ function drawDojo() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffcc88';
   ctx.font = `bold 9px ${GAME_FONT}`;
-  ctx.fillText('GGD DOJO — PRACTICE MODE', W / 2, 23);
+  if (dojoTrialOn) {
+    ctx.fillText('GGD DOJO — TRIAL', W / 2, 23);
+  } else {
+    ctx.fillText('GGD DOJO — PRACTICE MODE', W / 2, 23);
+  }
+
+  // Trial mode — timer bar + score
+  if (dojoTrialOn) {
+    // Progress bar
+    const barW = W - 30;
+    const barH = 5;
+    const barX = 15;
+    const barY = 8;
+    const progress = dojoTrialTimer / dojoTrialDuration;
+    ctx.fillStyle = '#333344';
+    ctx.fillRect(barX, barY, barW, barH);
+    // Color ramps from green to yellow to red
+    const r = Math.min(255, Math.floor(progress * 2 * 255));
+    const g = Math.min(255, Math.floor((1 - progress) * 2 * 255));
+    ctx.fillStyle = `rgb(${r},${g},60)`;
+    ctx.fillRect(barX, barY, barW * progress, barH);
+
+    // Left: score
+    ctx.textAlign = 'left';
+    ctx.font = `bold 12px ${GAME_FONT}`;
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText('SCORE: ' + dojoTrialScore, 15, 30);
+
+    // Right: dodge/hit
+    ctx.textAlign = 'right';
+    ctx.font = `bold 11px ${GAME_FONT}`;
+    ctx.fillStyle = '#88ff88';
+    ctx.fillText('DODGE: ' + dojoDodgeCount, W - 15, 23);
+    ctx.fillStyle = '#ff6666';
+    ctx.fillText('HIT: ' + dojoHitCount, W - 15, 33);
+  } else if (!dojoTrialOn && dojoTrialScore > 0) {
+    // Show final score after trial ends
+    ctx.textAlign = 'left';
+    ctx.font = `bold 12px ${GAME_FONT}`;
+    ctx.fillStyle = '#ffcc00';
+    const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+    ctx.globalAlpha = pulse;
+    ctx.fillText('FINAL: ' + dojoTrialScore + '  DODGE: ' + dojoDodgeCount + '  HIT: ' + dojoHitCount, 15, 13);
+    ctx.globalAlpha = 1;
+  } else {
+    // Toggle indicators (non-trial)
+    ctx.font = `10px ${GAME_FONT}`;
+    if (dojoBirdsOn) {
+      ctx.fillStyle = '#88ff88';
+      ctx.fillText('BIRDS: ON', W / 2 - 60, 13);
+    }
+    if (dojoWaterOn) {
+      ctx.fillStyle = '#88ddff';
+      ctx.fillText('WATER: ON', W / 2 + 60, 13);
+    }
+
+    // Dodge / Hit score counter (shown when birds or water active)
+    if (dojoBirdsOn || dojoWaterOn) {
+      ctx.textAlign = 'right';
+      ctx.font = `bold 12px ${GAME_FONT}`;
+      ctx.fillStyle = '#88ff88';
+      ctx.fillText('DODGE: ' + dojoDodgeCount, W - 15, 15);
+      ctx.fillStyle = '#ff6666';
+      ctx.fillText('HIT: ' + dojoHitCount, W - 15, 30);
+    }
+  }
 
   ctx.textAlign = 'left';
   ctx.fillStyle = '#887766';
-  ctx.font = `12px ${GAME_FONT}`;
-  ctx.fillText('Move: A/D  ·  Jump: Space  ·  Double Jump  ·  M: Change Music  ·  ESC: Exit', 15, H - 12);
+  ctx.font = `11px ${GAME_FONT}`;
+  ctx.fillText('A/D: Move  ·  Space: Jump  ·  N: Music  ·  I: Birds  ·  O: Water  ·  T: Trial  ·  ESC: Exit', 15, H - 12);
 }
 
 // ══════════════════════════════
@@ -3421,7 +3878,11 @@ function drawPlayer() {
     let scaleYAnim = 1;
     let scaleXAnim = 1;
 
-    if (player.kicking) {
+    if (player.crouching) {
+      // ── CROUCH ANIMATION ──
+      scaleYAnim = 0.5;   // squash to half height
+      scaleXAnim = 1.2;   // wider to compensate
+    } else if (player.kicking) {
       // ── KICK ANIMATION ──
       // Kick is a fast forward tilt + leg extension
       const kt = player.kickTimer / 20; // 0 to 1
@@ -3562,7 +4023,7 @@ function drawHUD() {
   ctx.fillStyle = '#33ccff';
   ctx.font = `bold 7px ${GAME_FONT}`;
   ctx.textAlign = 'left';
-  ctx.fillText(`LEVEL ${level} — NEO TOKYO`, 20, 38);
+  ctx.fillText(`LEVEL 1-${level} — NEO TOKYO`, 20, 38);
 
   // Score
   ctx.fillStyle = '#fff';
@@ -3787,6 +4248,9 @@ function drawMenu() {
     ctx.fillStyle = '#667788';
     ctx.font = `10px ${GAME_FONT}`;
     ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
+    ctx.fillStyle = '#556677';
+    ctx.font = `9px ${GAME_FONT}`;
+    ctx.fillText('Type GGD to enter the Dojo  ·  Type OG for the original', W / 2, H - 10);
     ctx.globalAlpha = 1;
   }
 
@@ -3838,36 +4302,266 @@ function drawMenu() {
   }
 }
 
+// ── STORY SCROLL (emerald narrative after 1-3) ──
+// Every entry is one line. '__BREAK__' = paragraph gap. '__IMAGE__' = emerald guy. '__GGD__' = ggd sprite. '__SCORE__' = score block.
+const STORY_LINE_H = 28;   // uniform line height for every text line
+const STORY_BREAK_H = 28;  // paragraph break (one blank line)
+const STORY_IMG_SIZE = 250; // emerald figure rendered size (25% larger)
+const STORY_GGD_SIZE = 140; // ggd sprite rendered size
+const STORY_SCORE_H = 120;  // score block height
+
+const STORY_LINES = [
+  { text: 'YOU GOT GOOD', color: '#ffcc00', size: 24, bold: true },
+  { text: '__BREAK__' },
+  { text: 'The fires could not', color: '#bbaa88', size: 16 },
+  { text: 'claim you.', color: '#bbaa88', size: 16 },
+  { text: '__BREAK__' },
+  { text: 'You pulled families', color: '#998877', size: 16 },
+  { text: 'from burning towers.', color: '#998877', size: 16 },
+  { text: 'Carried children across', color: '#998877', size: 16 },
+  { text: 'rivers of molten rock.', color: '#998877', size: 16 },
+  { text: '__BREAK__' },
+  { text: 'Outran school buses.', color: '#998877', size: 16 },
+  { text: 'Leapt over firetrucks.', color: '#998877', size: 16 },
+  { text: 'Danced on streetlamps', color: '#998877', size: 16 },
+  { text: 'above the lava.', color: '#998877', size: 16 },
+  { text: '__BREAK__' },
+  { text: 'Three districts.', color: '#aabbcc', size: 16 },
+  { text: 'Endless fire.', color: '#aabbcc', size: 16 },
+  { text: 'And still you ran.', color: '#aabbcc', size: 16 },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: 'At the edge of', color: '#998877', size: 16 },
+  { text: 'the village, a figure', color: '#998877', size: 16 },
+  { text: 'steps from the shadow.', color: '#998877', size: 16 },
+  { text: '__BREAK__' },
+  { text: 'A hooded man.', color: '#aabbcc', size: 16 },
+  { text: 'Eyes like embers.', color: '#aabbcc', size: 16 },
+  { text: '__BREAK__' },
+  { text: '__IMAGE__' },
+  { text: '__BREAK__' },
+  { text: 'He holds out', color: '#bbddbb', size: 16 },
+  { text: 'a glowing stone.', color: '#bbddbb', size: 16 },
+  { text: '__BREAK__' },
+  { text: '"You made it through', color: '#44dd88', size: 16 },
+  { text: 'the fire. But the', color: '#44dd88', size: 16 },
+  { text: 'volcano still burns."', color: '#44dd88', size: 16 },
+  { text: '__BREAK__' },
+  { text: '"Take this emerald.', color: '#44dd88', size: 16 },
+  { text: 'Return it to the heart', color: '#44dd88', size: 16 },
+  { text: 'of the mountain."', color: '#44dd88', size: 16 },
+  { text: '__BREAK__' },
+  { text: '"Only then will the', color: '#44dd88', size: 14 },
+  { text: 'fires stop."', color: '#44dd88', size: 14 },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: 'You take it.', color: '#ffcc88', size: 18, bold: true },
+  { text: 'It burns cold', color: '#ffcc88', size: 18, bold: true },
+  { text: 'in your hand.', color: '#ffcc88', size: 18, bold: true },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: 'The journey is not', color: '#aabbcc', size: 16 },
+  { text: 'over. It has only', color: '#aabbcc', size: 16 },
+  { text: 'just begun.', color: '#aabbcc', size: 16 },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: 'TO BE CONTINUED...', color: '#ffcc44', size: 20, bold: true },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: '__GGD__' },
+  { text: '__BREAK__' },
+  { text: 'EVERYTHING IS LAVA', color: '#ff6644', size: 20, bold: true },
+  { text: '__BREAK__' },
+  { text: 'A Get Good Dad Game', color: '#44aaff', size: 14, bold: true },
+  { text: 'Toledo.codes Game Jam', color: '#667788', size: 12 },
+  { text: 'March 2026', color: '#667788', size: 12 },
+  { text: '__BREAK__' },
+  { text: '__BREAK__' },
+  { text: '__SCORE__' },
+];
+
+function storyLineHeight(l) {
+  if (l.text === '__IMAGE__') return STORY_IMG_SIZE + 20;
+  if (l.text === '__GGD__') return STORY_GGD_SIZE + 20;
+  if (l.text === '__SCORE__') return STORY_SCORE_H;
+  if (l.text === '__BREAK__') return STORY_BREAK_H;
+  return STORY_LINE_H;
+}
+
+// Pre-compute total story height
+let STORY_TOTAL_H = 0;
+for (let i = 0; i < STORY_LINES.length; i++) {
+  STORY_TOTAL_H += storyLineHeight(STORY_LINES[i]);
+}
+
 function drawLevelComplete() {
+  // Simple clear screen
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#33ccff';
+  ctx.shadowBlur = 25;
+  ctx.fillStyle = '#33ccff';
+  ctx.font = FONT_24B;
+  ctx.fillText(`LEVEL 1-${level} CLEAR!`, W / 2, H / 2 - 45);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#ffcc88';
+  ctx.font = FONT_14B;
+  ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 5);
+  const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#ffaa66';
+  ctx.font = FONT_12;
+  ctx.fillText('Press SPACE to continue', W / 2, H / 2 + 50);
+  ctx.globalAlpha = 1;
+}
+
+function drawStoryScroll() {
+  // Black background
+  ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, W, H);
 
   ctx.textAlign = 'center';
 
-  ctx.shadowColor = '#33ccff';
-  ctx.shadowBlur = 25;
-  ctx.fillStyle = '#33ccff';
-  ctx.font = `bold 24px ${GAME_FONT}`;
-  ctx.fillText('LEVEL CLEAR!', W / 2, H / 2 - 45);
-  ctx.shadowBlur = 0;
+  // Scroll zone with edge fade
+  const scrollZoneTop = 40;
+  const scrollZoneBot = H - 40;
+  const fadeZone = 40; // pixels over which text fades at edges
 
-  ctx.fillStyle = '#ffcc88';
-  ctx.font = `bold 14px ${GAME_FONT}`;
-  ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 5);
+  // Compute where each line sits — all content scrolls together
+  let drawY = H + 60 - storyScrollY * STORY_LINE_H;
 
-  ctx.fillStyle = '#aaddff';
-  ctx.font = `11px ${GAME_FONT}`;
-  ctx.fillText(`Level ${level + 1} awaits...`, W / 2, H / 2 + 35);
-  ctx.fillStyle = '#667788';
-  ctx.font = `10px ${GAME_FONT}`;
-  ctx.fillText(`${lives} ${lives === 1 ? 'life' : 'lives'} remaining`, W / 2, H / 2 + 55);
+  // Check if scroll should stop ("EVERYTHING IS LAVA" + credits centered on screen)
+  // Find the "EVERYTHING IS LAVA" line position
+  let eilY = drawY;
+  for (let i = 0; i < STORY_LINES.length; i++) {
+    if (STORY_LINES[i].text === 'EVERYTHING IS LAVA') break;
+    eilY += storyLineHeight(STORY_LINES[i]);
+  }
+  // Block from "EVERYTHING IS LAVA" through "March 2026" is ~5 lines (140px)
+  // Center that block on screen
+  const creditsBlockH = STORY_LINE_H * 5;
+  if (eilY + creditsBlockH / 2 < H / 2) {
+    storyScrollDone = true;
+  }
 
-  const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
-  ctx.globalAlpha = pulse;
-  ctx.fillStyle = '#ffaa66';
-  ctx.font = `12px ${GAME_FONT}`;
-  ctx.fillText('Press SPACE to continue', W / 2, H / 2 + 70);
+  // Draw all lines
+  for (let i = 0; i < STORY_LINES.length; i++) {
+    const l = STORY_LINES[i];
+    const lineH = storyLineHeight(l);
+
+    // __BREAK__ — just advance position, draw nothing
+    if (l.text === '__BREAK__') {
+      drawY += lineH;
+      continue;
+    }
+
+    // __IMAGE__ — emerald figure, scrolls with text
+    if (l.text === '__IMAGE__') {
+      if (emeraldReady) {
+        const imgX = W / 2 - STORY_IMG_SIZE / 2;
+        const imgMid = drawY + STORY_IMG_SIZE / 2;
+        if (imgMid > scrollZoneTop - STORY_IMG_SIZE && imgMid < scrollZoneBot + STORY_IMG_SIZE) {
+          const fadeTop = Math.min(1, (imgMid - scrollZoneTop) / fadeZone);
+          const fadeBot = Math.min(1, (scrollZoneBot - imgMid) / fadeZone);
+          ctx.globalAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
+          ctx.drawImage(emeraldImg, imgX, drawY, STORY_IMG_SIZE, STORY_IMG_SIZE);
+        }
+      }
+      drawY += lineH;
+      continue;
+    }
+
+    // __GGD__ — ggd sprite, scrolls with text
+    if (l.text === '__GGD__') {
+      if (ggdReady) {
+        const imgX = W / 2 - STORY_GGD_SIZE / 2;
+        const imgMid = drawY + STORY_GGD_SIZE / 2;
+        if (imgMid > scrollZoneTop - STORY_GGD_SIZE && imgMid < scrollZoneBot + STORY_GGD_SIZE) {
+          const fadeTop = Math.min(1, (imgMid - scrollZoneTop) / fadeZone);
+          const fadeBot = Math.min(1, (scrollZoneBot - imgMid) / fadeZone);
+          ctx.globalAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
+          ctx.drawImage(ggdImg, imgX, drawY, STORY_GGD_SIZE, STORY_GGD_SIZE);
+        }
+      }
+      drawY += lineH;
+      continue;
+    }
+
+    // __SCORE__ — score block
+    if (l.text === '__SCORE__') {
+      const blockTop = drawY;
+      const blockMid = blockTop + STORY_SCORE_H / 2;
+      drawY += lineH;
+      if (blockMid < scrollZoneTop - 20 || blockMid > scrollZoneBot + 20) continue;
+      const fadeTop = Math.min(1, (blockMid - scrollZoneTop) / fadeZone);
+      const fadeBot = Math.min(1, (scrollZoneBot - blockMid) / fadeZone);
+      const blockAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
+      if (blockAlpha <= 0) continue;
+      ctx.globalAlpha = blockAlpha;
+      // Compute life bonus (same formula as level complete)
+      const lifeBonus = konamiUsed ? 0 : (lives >= MAX_LIVES ? 10000 : lives * 1000);
+      const baseScore = score - lifeBonus;
+      // Line 1: SCORE
+      ctx.fillStyle = '#ffcc88';
+      ctx.font = 'bold 14px ' + GAME_FONT;
+      ctx.fillText('SCORE: ' + (konamiUsed ? 0 : baseScore).toLocaleString(), W / 2, blockTop + 10);
+      // Line 2: Lives remaining
+      ctx.fillStyle = '#aaddff';
+      ctx.font = '12px ' + GAME_FONT;
+      ctx.fillText(lives + (lives === 1 ? ' life' : ' lives') + ' remaining', W / 2, blockTop + 36);
+      // Line 3: Life bonus
+      ctx.fillStyle = lives >= MAX_LIVES ? '#ffcc00' : '#88ddff';
+      ctx.font = 'bold 12px ' + GAME_FONT;
+      ctx.fillText('LIFE BONUS: +' + lifeBonus.toLocaleString(), W / 2, blockTop + 58);
+      // Line 4: Total score (larger, gold)
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = 'bold 18px ' + GAME_FONT;
+      ctx.fillText('TOTAL: ' + score.toLocaleString(), W / 2, blockTop + 88);
+      continue;
+    }
+
+    // Regular text line
+    drawY += lineH;
+    if (drawY < scrollZoneTop - 20 || drawY > scrollZoneBot + 20) continue;
+
+    // Fade at edges
+    const fadeTop = Math.min(1, (drawY - scrollZoneTop) / fadeZone);
+    const fadeBot = Math.min(1, (scrollZoneBot - drawY) / fadeZone);
+    const lineAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
+    if (lineAlpha <= 0) continue;
+
+    ctx.globalAlpha = lineAlpha;
+    ctx.fillStyle = l.color || '#ffffff';
+    ctx.font = `${l.bold ? 'bold ' : ''}${l.size}px ${GAME_FONT}`;
+    ctx.fillText(l.text, W / 2, drawY);
+  }
+
   ctx.globalAlpha = 1;
+
+  // Edge vignettes (top and bottom fade to black)
+  const vigGrad = ctx.createLinearGradient(0, 0, 0, scrollZoneTop + 20);
+  vigGrad.addColorStop(0, 'rgba(0,0,0,1)');
+  vigGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = vigGrad;
+  ctx.fillRect(0, 0, W, scrollZoneTop + 20);
+  const vigBot = ctx.createLinearGradient(0, scrollZoneBot - 20, 0, H);
+  vigBot.addColorStop(0, 'rgba(0,0,0,0)');
+  vigBot.addColorStop(1, 'rgba(0,0,0,1)');
+  ctx.fillStyle = vigBot;
+  ctx.fillRect(0, scrollZoneBot - 20, W, H - scrollZoneBot + 20);
+
+  // "Press SPACE" prompt once scroll is done
+  if (storyScrollDone) {
+    const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffaa66';
+    ctx.font = FONT_12;
+    ctx.textAlign = 'center';
+    ctx.fillText('Press SPACE to continue', W / 2, H - 18);
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawRespawnScreen() {
@@ -3952,195 +4646,9 @@ function drawRespawnScreen() {
   }
 }
 
-let victoryScrollDone = false;
-let victoryBaseScore = 0;
-let victoryLifeBonus = 0;
-let victoryLegendCache = null; // built once on victory trigger
-
-function buildVictoryLegend() {
-  const lines = [
-    { text: 'CONGRATULATIONS', font: FONT_24B, color: '#ffcc00', gap: 20 },
-    { text: '', font: '', color: '', gap: 20 },
-    { text: 'SCORE: ' + victoryBaseScore.toLocaleString(), font: FONT_14B, color: '#ffcc88', gap: 8 },
-    { text: lives + (lives === 1 ? ' life' : ' lives') + ' remaining', font: FONT_12, color: '#aaddff', gap: 6 },
-    { text: 'LIFE BONUS: +' + victoryLifeBonus.toLocaleString(), font: FONT_12B, color: lives >= MAX_LIVES ? '#ffcc00' : '#88ddff', gap: 10 },
-    { text: '', font: '', color: '', gap: 6 },
-    { text: 'TOTAL SCORE: ' + score.toLocaleString(), font: FONT_18B, color: '#ffcc00', gap: 14 },
-  ];
-  if (lives >= MAX_LIVES) {
-    lines.push(
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'GRAND LEGEND STATUS', font: FONT_18B, color: '#ffcc00', gap: 10 },
-      { text: 'The Goodest of', font: FONT_14B, color: '#ffcc44', gap: 6 },
-      { text: 'Get Good Dads', font: FONT_14B, color: '#ffcc44', gap: 10 },
-      { text: '', font: '', color: '', gap: 6 },
-      { text: 'Not a single life lost.', font: FONT_12, color: '#aaddff', gap: 6 },
-      { text: 'Perfection.', font: FONT_13B, color: '#44aaff', gap: 10 }
-    );
-  }
-  lines.push(
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'He made it.', font: FONT_14B, color: '#ffcc66', gap: 16 },
-    { text: '', font: '', color: '', gap: 8 },
-    { text: 'Three districts of fire and ruin.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'Three levels of molten hell.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'And Get Good Dad reached', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'the edge of the city.', font: FONT_12, color: '#ccbbaa', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'Behind him...', font: FONT_12, color: '#998877', gap: 8 },
-    { text: 'the streets are silent now.', font: FONT_12, color: '#998877', gap: 6 },
-    { text: 'The sirens have stopped.', font: FONT_12, color: '#998877', gap: 6 },
-    { text: 'The buses no longer scream.', font: FONT_12, color: '#998877', gap: 16 },
-    { text: '', font: '', color: '', gap: 8 },
-    { text: 'Thousands died.', font: FONT_13B, color: '#ff6644', gap: 12 },
-    { text: '', font: '', color: '', gap: 6 },
-    { text: 'But many more survived.', font: FONT_13B, color: '#44aaff', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'Because of him.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'Because he ran when others froze.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'Because he jumped when others fell.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'Because he refused to stop.', font: FONT_12, color: '#ccbbaa', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'But this isn\'t over.', font: FONT_13B, color: '#ffcc66', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'Beyond the city limits...', font: FONT_12, color: '#998877', gap: 6 },
-    { text: 'the ground cracks open.', font: FONT_12, color: '#998877', gap: 6 },
-    { text: 'The sky glows red.', font: FONT_12, color: '#998877', gap: 6 },
-    { text: 'The earth shakes with a heartbeat', font: FONT_12, color: '#998877', gap: 6 },
-    { text: 'that is not human.', font: FONT_12, color: '#998877', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'The volcano.', font: FONT_16B, color: '#ff4400', gap: 16 },
-    { text: '', font: '', color: '', gap: 8 },
-    { text: 'Something lives inside it.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'Something ancient.', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'Something that has been feeding', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'on the fire and the fear', font: FONT_12, color: '#ccbbaa', gap: 6 },
-    { text: 'and the screams of a burning city.', font: FONT_12, color: '#ccbbaa', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'A demon.', font: FONT_18B, color: '#ff2200', gap: 16 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'It will not stop at Neo Tokyo.', font: FONT_12, color: '#aa9988', gap: 6 },
-    { text: 'It will swallow the world.', font: FONT_12, color: '#aa9988', gap: 6 },
-    { text: 'City by city.', font: FONT_12, color: '#aa9988', gap: 6 },
-    { text: 'Until everything is lava.', font: FONT_13B, color: '#ff6644', gap: 20 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'Unless someone stops it.', font: FONT_12, color: '#ccbbaa', gap: 16 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'SPRITE', font: '', color: '', gap: 110 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'He must reach the volcano.', font: FONT_14B, color: '#ffcc66', gap: 8 },
-    { text: 'He must face the demon within.', font: FONT_14B, color: '#ffcc66', gap: 8 },
-    { text: 'He must save the world.', font: FONT_14B, color: '#ffcc66', gap: 24 },
-    { text: '', font: '', color: '', gap: 10 },
-    { text: 'He is Get Good Dad.', font: FONT_18B, color: '#ffcc44', gap: 16 },
-    { text: '', font: '', color: '', gap: 8 },
-    { text: 'And he is the only one who can.', font: FONT_13B, color: '#44aaff', gap: 30 },
-    { text: '', font: '', color: '', gap: 20 },
-    { text: 'TO BE CONTINUED...', font: FONT_20B, color: '#ff4400', gap: 30 },
-    { text: '', font: '', color: '', gap: 40 }
-  );
-  if (totalAttempts >= 512) {
-    lines.splice(lines.length - 1, 0,
-      { text: '', font: '', color: '', gap: 20 },
-      { text: '...', font: FONT_12, color: '#667788', gap: 20 },
-      { text: totalAttempts + ' attempts.', font: FONT_14B, color: '#ffcc88', gap: 10 },
-      { text: '', font: '', color: '', gap: 8 },
-      { text: 'You never gave up.', font: FONT_14B, color: '#44aaff', gap: 8 },
-      { text: 'You never quit.', font: FONT_14B, color: '#44aaff', gap: 8 },
-      { text: 'You never stopped trying.', font: FONT_14B, color: '#44aaff', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'That is what it means', font: FONT_12, color: '#ccbbaa', gap: 6 },
-      { text: 'to get good.', font: FONT_16B, color: '#ffcc44', gap: 20 },
-      { text: '', font: '', color: '', gap: 10 },
-      { text: 'You are Get Good Dad.', font: FONT_18B, color: '#ffcc00', gap: 30 }
-    );
-  }
-  return lines;
-}
-
 function drawVictory() {
-  const t = deathTimer;
-
-  // Black background
-  ctx.fillStyle = '#0a0a1a';
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.textAlign = 'center';
-
-  const scrollStart = 120; // frames before scroll begins
-  const lineH = 22;
-
-  if (t > scrollStart) {
-    const scrollY = (t - scrollStart) * 0.4; // scroll speed
-    const legendLines = victoryLegendCache;
-
-    // Calculate positions and draw
-    let yPos = H + 40 - scrollY;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 35, W, H - 70);
-    ctx.clip();
-
-    for (const line of legendLines) {
-      if (line.text === 'SPRITE') {
-        if (spriteReady && yPos > -110 && yPos < H + 30) {
-          const sprW = 100, sprH = 100;
-          const fadeTop = Math.min(1, (yPos - 35) / 50);
-          const fadeBot = Math.min(1, (H - 35 - yPos) / 50);
-          ctx.globalAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
-          // Blue glow behind sprite
-          ctx.shadowColor = '#44aaff';
-          ctx.shadowBlur = 25;
-          ctx.drawImage(ninjaSprite, W / 2 - sprW / 2, yPos, sprW, sprH);
-          ctx.shadowBlur = 0;
-        }
-        yPos += line.gap;
-        continue;
-      }
-      if (line.text === '') { yPos += line.gap; continue; }
-
-      if (yPos > -30 && yPos < H + 30) {
-        const fadeTop = Math.min(1, (yPos - 35) / 50);
-        const fadeBot = Math.min(1, (H - 35 - yPos) / 50);
-        ctx.globalAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
-        ctx.font = line.font;
-        ctx.fillStyle = line.color;
-        // Golden glow for headings
-        if (line.color === '#ffcc00' || line.color === '#ffcc44') {
-          ctx.shadowColor = line.color;
-          ctx.shadowBlur = 15;
-        }
-        ctx.fillText(line.text, W / 2, yPos);
-        ctx.shadowBlur = 0;
-      }
-      yPos += lineH + line.gap;
-    }
-
-    ctx.restore();
-    ctx.globalAlpha = 1;
-
-    // Check if scroll finished
-    let totalH = 0;
-    for (const line of legendLines) {
-      if (line.text === '' || line.text === 'SPRITE') { totalH += line.gap; }
-      else { totalH += lineH + line.gap; }
-    }
-    const endScrollY = totalH + 40 - H / 2;
-    if (scrollY > endScrollY) {
-      victoryScrollDone = true;
-    }
-  } else {
-    // Brief pause — show title before scroll starts
-    const fadeIn = Math.min(1, t / 40);
-    ctx.globalAlpha = fadeIn;
-    ctx.shadowColor = '#ffcc00';
-    ctx.shadowBlur = 30;
-    ctx.fillStyle = '#ffcc00';
-    ctx.font = `bold 24px ${GAME_FONT}`;
-    ctx.fillText('YOU GOT GOOD', W / 2, H / 2);
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
-  }
+  // Use the emerald story scroll as the ending
+  drawStoryScroll();
 }
 
 function drawDeathScreen() {
@@ -4494,7 +5002,7 @@ function drawTransition() {
   ctx.shadowColor = '#33ccff';
   ctx.shadowBlur = 20;
   ctx.font = `bold 20px ${GAME_FONT}`;
-  ctx.fillText(`LEVEL ${level}`, W / 2, H / 2 - 20);
+  ctx.fillText(`LEVEL 1-${level}`, W / 2, H / 2 - 20);
   ctx.shadowBlur = 0;
 
   // Location name
@@ -4510,10 +5018,18 @@ const HELP_LINES = [
   { label: 'MOVEMENT',     keys: 'A/D  or  \u2190/\u2192' },
   { label: 'JUMP',         keys: 'SPACE  W  or  \u2191' },
   { label: 'DOUBLE JUMP',  keys: 'JUMP again mid-air' },
+  { label: 'CROUCH',       keys: 'S  or  \u2193' },
   { label: 'MUTE',         keys: 'M' },
   { label: 'VOLUME',       keys: '+  /  \u2013' },
+  { label: 'RESET',        keys: 'Q' },
   { label: 'README',       keys: 'R  (menu only)' },
   { label: 'HELP',         keys: '?' },
+  { label: '',             keys: '' },
+  { label: 'DOJO',         keys: 'Type G-G-D on menu' },
+  { label: 'NEXT TRACK',   keys: 'N  (dojo)' },
+  { label: 'BIRDS',        keys: 'I  (dojo)' },
+  { label: 'WATER',        keys: 'O  (dojo)' },
+  { label: 'TRIAL',        keys: 'T  (dojo)' },
 ];
 function drawHelpOverlay() {
   // Dim background
@@ -4663,6 +5179,12 @@ function gameLoop() {
   }
   if (gameState === 'playing' && creditsTimer > 0) {
     creditsTimer++;
+  }
+  // Advance story scroll on victory screen
+  if (gameState === 'victory' && !storyScrollDone) {
+    if (deathTimer > 120) { // 2 second pause before scroll starts
+      storyScrollY += 0.025; // ~0.7 px/frame (0.025 * STORY_LINE_H 28)
+    }
   }
   if (gameState === 'transition') {
     transitionTimer--;
