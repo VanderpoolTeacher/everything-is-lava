@@ -1556,26 +1556,54 @@ function update() {
   }
 
   // Street lamp platform collision (check before ground so lamps take priority)
-  for (const lamp of streetLamps) {
-    const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
-    const platLeft = lsx - lamp.lampW / 2;
-    const platRight = lsx + lamp.lampW / 2;
-    const platTop = GROUND_Y - lamp.poleH - lamp.lampH;
-    const platBot = GROUND_Y - lamp.poleH;
+  if (level < 4) {
+    for (const lamp of streetLamps) {
+      const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
+      const platLeft = lsx - lamp.lampW / 2;
+      const platRight = lsx + lamp.lampW / 2;
+      const platTop = GROUND_Y - lamp.poleH - lamp.lampH;
+      const platBot = GROUND_Y - lamp.poleH;
 
-    // Player is above the platform and falling onto it
-    if (
-      player.vy >= 0 &&
-      player.x + player.w > platLeft &&
-      player.x < platRight &&
-      player.y + player.h >= platTop &&
-      player.y + player.h <= platBot + player.vy + 4
-    ) {
-      player.y = platTop - player.h;
-      player.vy = 0;
-      player.grounded = true;
-      player.jumping = false;
-      player.doubleJumped = false;
+      // Player is above the platform and falling onto it
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > platLeft &&
+        player.x < platRight &&
+        player.y + player.h >= platTop &&
+        player.y + player.h <= platBot + player.vy + 4
+      ) {
+        player.y = platTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+      }
+    }
+  }
+
+  // Tree platform collision (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.collapsed) continue;
+      const tsx = t.worldX - scrollOffset;
+      if (tsx < -100 || tsx > W + 100) continue;
+      const baseY = getGroundY(t.worldX);
+      const platTop = baseY - t.height - t.canopyH;
+      const platBot = baseY - t.height;
+      const halfW = t.canopyW / 2;
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > tsx - halfW &&
+        player.x < tsx + halfW &&
+        player.y + player.h >= platTop &&
+        player.y + player.h <= platBot + player.vy + 4
+      ) {
+        player.y = platTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+      }
     }
   }
 
