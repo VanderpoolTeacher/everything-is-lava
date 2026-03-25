@@ -1449,7 +1449,9 @@ function startGame() {
   explosions = [];
   vehicleDebris = [];
   generateBuildings();
-  generateStreetLamps();
+  if (level < 4) {
+    generateStreetLamps();
+  }
   if (level === 4) {
     generateTrees();
     generateRuins();
@@ -1980,27 +1982,29 @@ function update() {
   // Update neon sign blinking
   for (let si = 0; si < neonSigns.length; si++) neonSigns[si].blink += neonSigns[si].blinkSpeed;
 
-  // Spawn emergency vehicles:
-  // 0) Level 1: school bus right away — sets the tone
-  // 1) School bus at exactly 1/3 mark
-  // 2) Regular vehicle shortly after
-  // 3) More frequent random spawns in second half, biased from right
-  if (level === 1 && levelTimer === 60) {
-    spawnVehicle('schoolbus');
-  }
-  // Guaranteed ladder truck early in level 2
-  if (level === 2 && levelTimer === 90) {
-    spawnVehicle('firetruck', true);
-  }
-  const thirdMark = Math.floor(levelDuration / 3);
-  if (levelTimer === thirdMark) {
-    spawnVehicle('schoolbus');
-  }
-  if (levelTimer === thirdMark + 60) {
-    spawnVehicle(); // follow-up emergency vehicle
-  }
-  if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
-    spawnVehicle();
+  // Spawn emergency vehicles (no vehicles in level 4 — destroyed wasteland):
+  if (level < 4) {
+    // 0) Level 1: school bus right away — sets the tone
+    // 1) School bus at exactly 1/3 mark
+    // 2) Regular vehicle shortly after
+    // 3) More frequent random spawns in second half, biased from right
+    if (level === 1 && levelTimer === 60) {
+      spawnVehicle('schoolbus');
+    }
+    // Guaranteed ladder truck early in level 2
+    if (level === 2 && levelTimer === 90) {
+      spawnVehicle('firetruck', true);
+    }
+    const thirdMark = Math.floor(levelDuration / 3);
+    if (levelTimer === thirdMark) {
+      spawnVehicle('schoolbus');
+    }
+    if (levelTimer === thirdMark + 60) {
+      spawnVehicle(); // follow-up emergency vehicle
+    }
+    if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
+      spawnVehicle();
+    }
   }
 
   // Update vehicles + siren audio
