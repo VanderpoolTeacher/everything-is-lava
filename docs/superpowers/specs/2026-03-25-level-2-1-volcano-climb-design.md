@@ -20,7 +20,25 @@ Replace the flat `GROUND_Y` constant with a `getGroundY(worldX)` function that c
 - **Scroll:** Horizontal scroll at `RUN_SPEED` (same as 1-x). The angled ground surface creates the climbing feel.
 - **Camera & gravity:** Remain screen-relative (gravity pulls straight down). Only the terrain is angled.
 
-All collision checks that currently reference `GROUND_Y` must use `getGroundY(entityWorldX)` when `level === 4`.
+- **Clamp behavior:** When the ground approaches the 40% mark, the effective angle smoothly flattens (reduces toward 0°) rather than hard-clamping. This avoids a visible kink in the terrain.
+- **Ground rendering:** The ground is drawn as a filled polygon from the angled surface line down to the bottom of the canvas. Lava vein cracks follow the slope angle.
+
+### GROUND_Y References — What Changes
+
+Only gameplay-critical references to `GROUND_Y` change for `level === 4`. Rendering for levels 1-3, dojo mode, and menu screens must NOT be affected.
+
+**Must use `getGroundY()`:**
+- Player ground collision and spawn Y
+- Lava drop ground-hit detection and lava pool spawn Y
+- Tree base positioning
+- Molten rock Y tracking
+- Player shadow Y position
+
+**Must NOT change:**
+- Dojo mode (uses its own layout)
+- Menu/title screen
+- Level 1-3 rendering functions (streetlamps, road, village, buildings)
+- HUD/overlay elements
 
 ## Hazards
 
@@ -36,7 +54,8 @@ Small molten rocks roll downhill from right to left. Only small rocks appear in 
 - **Spawn rate:** Very sparse — every ~150 frames in first third, every ~100 in second third, every ~70 in final third
 - **Spawn position:** Right edge of screen, on the ground
 - **Removal:** Roll off left edge of screen
-- **Lava trail:** Occasionally spawn small lava pools behind them
+- **Lava trail:** ~5% chance per frame to spawn a small lava pool (half normal pool size) behind the rock
+- **Tree interaction:** Rocks roll on the ground and pass under/through trees (rocks don't directly ignite trees, but their lava trail pools can)
 
 ### Lava Rain (Carried Over)
 
@@ -81,6 +100,7 @@ When lava (raindrop or pool) contacts a tree, it catches fire and becomes a time
 
 **Rules:**
 - Player is NOT harmed by standing on a burning tree — only loses the platform on collapse
+- **On collapse with player standing:** Player's `grounded` is set to `false`, gravity resumes, player falls. No damage, no special animation — they simply lose their footing. Implementation must check each frame whether the platform under the player still exists.
 - Fire does NOT spread between trees
 - Visual: flames spread upward from lava contact point, canopy color transitions green → brown → dark red
 
@@ -133,15 +153,31 @@ Parallax layers depicting a city destroyed by lava, matching the existing parall
 |--------|--------|
 | Internal level number | `level === 4` |
 | Display name | "Level 2-1" |
-| Duration | 3000 frames (50 seconds) |
+| Duration | 3000 frames (50 seconds) — the existing formula `1800 + level * 300` naturally yields 3000 for level 4. Keep the formula. |
 | Transition in | Standard level transition screen showing "Level 2-1" |
 | Transition out | Standard `levelComplete` state (ready for 2-2) |
 | Vehicles | None — rocks replace them |
 | Streetlamps | None — trees replace them |
 | Konami code | Press `4` after sequence to jump to 2-1 |
-| Score | Continues formula: `Math.floor(levelTimer / 3) + 3000` base |
+| Score base | Continues formula: `Math.floor(levelTimer / 3) + (level - 1) * 1000` = 3000 base for level 4 |
+| Score completion bonus | Continues formula: `level * 1000` = +4000 for completing level 4 |
 | Music | Reuse existing track (placeholder until new tracks added) |
 | Lives | Carry over from 1-3 (or fresh 5 if entering via Konami) |
+| Sound effects | Reuse existing SFX for now. No new sound effects required for 2-1. |
+
+### Required Code Changes for Level Progression
+
+These existing guards must be updated to allow level 4:
+
+1. **Level cap in `startGame()`:** Change `level = Math.min(level + 1, 3)` to `Math.min(level + 1, 4)` (raise to 6 later when 2-2/2-3 are added)
+2. **Victory check:** Change `if (level >= 3)` victory trigger to `if (level >= 4)` (raise later for more levels)
+3. **Konami code handler:** Extend the digit check to include `Digit4` mapping to `level = 4`
+4. **Level display:** Add formatting logic so `level === 4` displays as "Level 2-1" (formula: `World ${Math.ceil(level/3)}-${((level-1)%3)+1}` or just a lookup table)
+
+### Visual Notes
+
+- **Player sprite:** Player remains upright (no tilt to match slope). The screen-relative gravity makes this feel natural.
+- **Tree spacing:** 250px minimum. Avoid placing two tall trees adjacent — if random selection picks tall, the next tree should be small or medium.
 
 ## What This Spec Does NOT Cover
 
