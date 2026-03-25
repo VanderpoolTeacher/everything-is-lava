@@ -56,22 +56,19 @@ const GROUND_Y = H - 60; // street level
 
 function getGroundY(worldX) {
   if (level !== 4) return GROUND_Y;
-  // Level 4 (2-1): ground slopes upward from left to right (climbing the volcano)
+  // Level 4 (2-1): ground slopes upward the entire time.
+  // The slope is relative to the current screen so it looks consistent
+  // throughout the level — the camera "climbs" with the player.
   const progress = Math.min(1, levelTimer / levelDuration); // 0→1 over the level
-  const startAngle = 15 * Math.PI / 180; // 15° at level start
-  const endAngle = 25 * Math.PI / 180;   // 25° at level end
-  const angle = startAngle + (endAngle - startAngle) * progress;
-  // Rise from left to right: higher worldX = higher ground (lower Y)
-  const rise = Math.tan(angle) * worldX;
-  const rawY = GROUND_Y - rise;
-  // Smooth flattening: ground never goes above H * 0.4
-  const minY = H * 0.4;
-  if (rawY < minY) {
-    // Soft asymptotic approach instead of hard clamp
-    const overshoot = minY - rawY;
-    return minY + overshoot * 0.15; // smoothly flattens near the ceiling
-  }
-  return rawY;
+  const slope = 0.22 + progress * 0.10; // rise/run ratio (~12°→18°, steepens over time)
+
+  // screenX: position on screen (0 = left edge, W = right edge)
+  const screenX = worldX - scrollOffset;
+  // Player is at ~150px on screen. Ground at player stays at GROUND_Y.
+  // Ground to the right of the player is higher (lower Y), left is lower (higher Y).
+  const playerScreenX = 150;
+  const rise = (screenX - playerScreenX) * slope;
+  return GROUND_Y - rise;
 }
 
 const PLAYER_SPEED = 4.5;
@@ -645,12 +642,13 @@ let moltenRocks = [];
 function spawnMoltenRock() {
   const sizeRoll = Math.random();
   let radius, speed;
+  // Molten rocks move slower than regular rocks — they're heavier and glow
   if (sizeRoll < 0.4) {
-    radius = 12; speed = 7 + Math.random() * 2;
+    radius = 14; speed = 3.5 + Math.random() * 1.5;
   } else if (sizeRoll < 0.75) {
-    radius = 22; speed = 5 + Math.random() * 2;
+    radius = 24; speed = 2.5 + Math.random() * 1.5;
   } else {
-    radius = 35; speed = 3 + Math.random() * 2;
+    radius = 38; speed = 1.5 + Math.random() * 1;
   }
   moltenRocks.push({
     worldX: scrollOffset + W + 50,
@@ -795,12 +793,12 @@ function generateStreetLamps() {
 
 // ── TREES (world coords, jumpable platforms for level 4) ──
 let trees = [];
-const TREE_SPACING = 250;
+const TREE_SPACING = 200;
 
 function generateTrees() {
   trees = [];
   let lastWasTall = false;
-  for (let wx = 200; wx < 10000; wx += TREE_SPACING) {
+  for (let wx = 150; wx < 10000; wx += TREE_SPACING + Math.random() * 60) {
     let sizeRoll = Math.random();
     let size;
     if (lastWasTall) {
