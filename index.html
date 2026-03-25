@@ -614,6 +614,31 @@ let lavaPools = [];    // on the ground
 let particles = [];
 let warningMarkers = []; // where drops will land
 
+// ── ROLLING ROCKS (Level 4) ──
+let rocks = [];
+
+function spawnRock() {
+  const sizeRoll = Math.random();
+  let size, radius, speed;
+  if (sizeRoll < 0.4) {
+    size = 'small'; radius = 12; speed = 7 + Math.random() * 2;
+  } else if (sizeRoll < 0.75) {
+    size = 'medium'; radius = 22; speed = 5 + Math.random() * 2;
+  } else {
+    size = 'large'; radius = 35; speed = 3 + Math.random() * 2;
+  }
+  const knockback = { small: 30, medium: 50, large: 80 };
+  rocks.push({
+    worldX: scrollOffset + W + 50,
+    radius: radius,
+    speed: speed,
+    size: size,
+    knockback: knockback[size],
+    rotation: 0,
+    rotationSpeed: speed / radius
+  });
+}
+
 // ── EMERGENCY VEHICLES ──
 let vehicles = [];
 
@@ -1277,6 +1302,7 @@ function clearGameState() {
   particles = [];
   warningMarkers = [];
   vehicles = [];
+  rocks = [];
   explosions = [];
   vehicleDebris = [];
   shakeTimer = 0;
@@ -1368,6 +1394,7 @@ function startGame() {
   particles = [];
   warningMarkers = [];
   vehicles = [];
+  rocks = [];
   explosions = [];
   vehicleDebris = [];
   generateBuildings();
@@ -1799,6 +1826,46 @@ function update() {
               color: `rgb(255, ${100 + Math.random() * 100 | 0}, 0)`
             });
           }
+        }
+      }
+    }
+  }
+
+  // Rolling rocks (level 4)
+  if (level === 4) {
+    const progress = levelTimer / levelDuration;
+    let rockRate;
+    if (progress < 0.33) rockRate = 100;
+    else if (progress < 0.66) rockRate = 70;
+    else rockRate = 50;
+    if (levelTimer % rockRate === 0) spawnRock();
+
+    for (let i = rocks.length - 1; i >= 0; i--) {
+      const r = rocks[i];
+      r.worldX -= r.speed;
+      r.rotation += r.rotationSpeed;
+      // Remove if off screen left
+      if (r.worldX < scrollOffset - 100) {
+        rocks.splice(i, 1);
+        continue;
+      }
+      // Player collision — knockback only, no kill
+      if (!player.invincible) {
+        const sx = r.worldX - scrollOffset;
+        const cy = getGroundY(r.worldX) - r.radius;
+        const px = player.x + player.w / 2;
+        const py = player.y + player.h / 2;
+        const dx = px - sx;
+        const dy = py - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < r.radius + player.w / 3) {
+          player.x -= r.knockback;
+          if (player.x < 0) player.x = 0;
+          player.invincible = 20;
+          shakeTimer = 8;
+          spawnParticles(sx, cy, '#8b7355', 8, 4);
+          rocks.splice(i, 1);
+          continue;
         }
       }
     }
@@ -4821,6 +4888,44 @@ function drawHelpOverlay() {
   ctx.fillText('Press any key to close', W / 2, H - 30);
 }
 
+function drawRocks() {
+  for (const r of rocks) {
+    const sx = r.worldX - scrollOffset;
+    if (sx < -50 || sx > W + 50) continue;
+    const cy = getGroundY(r.worldX) - r.radius;
+    ctx.save();
+    ctx.translate(sx, cy);
+    ctx.rotate(r.rotation);
+    // Main body
+    ctx.beginPath();
+    ctx.arc(0, 0, r.radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#6b5b4f';
+    ctx.fill();
+    // Darker edge
+    ctx.strokeStyle = '#4a3a2e';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Crack lines
+    ctx.beginPath();
+    ctx.moveTo(-r.radius * 0.3, -r.radius * 0.2);
+    ctx.lineTo(r.radius * 0.1, r.radius * 0.3);
+    ctx.lineTo(r.radius * 0.4, r.radius * 0.1);
+    ctx.strokeStyle = '#4a3a2e';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(r.radius * 0.2, -r.radius * 0.5);
+    ctx.lineTo(-r.radius * 0.1, -r.radius * 0.1);
+    ctx.stroke();
+    // 3D highlight
+    ctx.beginPath();
+    ctx.arc(-r.radius * 0.25, -r.radius * 0.25, r.radius * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(180, 170, 155, 0.3)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 // ── MAIN DRAW ──
 function draw() {
   ctx.save();
@@ -4858,6 +4963,7 @@ function draw() {
     } else {
       drawStreetLamps();
     }
+    if (level === 4) drawRocks();
 
     // Shadow overlay — everything falls into darkness near end of level 3
     if (villageProgress > 0) {
