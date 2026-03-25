@@ -1048,7 +1048,7 @@ window.addEventListener('keydown', e => {
   // Konami code detection — enter code, then press 1/2/3 to jump to level
   if (konamiActive) {
     // Waiting for level number after code was entered
-    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : 0;
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : 0;
     if (levelNum > 0) {
       konamiActive = false;
       konamiUsed = true;
@@ -1248,7 +1248,7 @@ function clearGameState() {
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
-    level = Math.min(level + 1, 3);
+    level = Math.min(level + 1, 4);
     levelDuration = 1800 + level * 300;
   } else {
     level = 1;
@@ -1371,7 +1371,7 @@ function update() {
   // Level complete?
   if (levelTimer >= levelDuration) {
     if (!konamiUsed) score += level * 1000;
-    if (level >= 3) {
+    if (level >= 4) {
       // Stop all gameplay audio
       levelMusic.pause();
       levelMusic.currentTime = 0;
@@ -3857,7 +3857,8 @@ function drawLevelComplete() {
 
   ctx.fillStyle = '#aaddff';
   ctx.font = `11px ${GAME_FONT}`;
-  ctx.fillText(`Level ${level + 1} awaits...`, W / 2, H / 2 + 35);
+  const nextLevelDisplay = (level + 1) <= 3 ? `Level ${level + 1}` : `Level ${Math.ceil((level+1)/3)}-${((level)%3)+1}`;
+  ctx.fillText(`${nextLevelDisplay} awaits...`, W / 2, H / 2 + 35);
   ctx.fillStyle = '#667788';
   ctx.font = `10px ${GAME_FONT}`;
   ctx.fillText(`${lives} ${lives === 1 ? 'life' : 'lives'} remaining`, W / 2, H / 2 + 55);
@@ -4494,7 +4495,8 @@ function drawTransition() {
   ctx.shadowColor = '#33ccff';
   ctx.shadowBlur = 20;
   ctx.font = `bold 20px ${GAME_FONT}`;
-  ctx.fillText(`LEVEL ${level}`, W / 2, H / 2 - 20);
+  const levelDisplay = level <= 3 ? `LEVEL ${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
+  ctx.fillText(levelDisplay, W / 2, H / 2 - 20);
   ctx.shadowBlur = 0;
 
   // Location name
