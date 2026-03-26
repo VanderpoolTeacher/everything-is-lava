@@ -1,0 +1,122 @@
+<h2>Level 2-1: Volcano Climb — Full Design</h2>
+<p class="subtitle">Section 3 of 4: Trees & Burning Mechanic</p>
+
+<div class="section">
+  <h3>Tree Platforms (Replace Streetlamps)</h3>
+  <div class="mockup">
+    <div class="mockup-header">Tree Size Variants</div>
+    <div class="mockup-body" style="height: 280px; position: relative; overflow: hidden; background: #1a0a00;">
+      <!-- Ground -->
+      <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: #4a3020;"></div>
+
+      <!-- Small Tree -->
+      <div style="position: absolute; bottom: 40px; left: 80px; text-align: center;">
+        <div style="font-size: 0.7rem; color: #88ff88; margin-bottom: 4px;">Single jump ↑</div>
+        <!-- Canopy -->
+        <div style="width: 40px; height: 20px; background: #2d5a1e; border-radius: 50%; margin: 0 auto; border: 2px solid #1a3a10;"></div>
+        <!-- Trunk -->
+        <div style="width: 10px; height: 60px; background: #5a3a20; margin: 0 auto;"></div>
+        <div style="font-size: 0.75rem; color: #aaa; margin-top: 4px;">Small (~80px)</div>
+      </div>
+
+      <!-- Medium Tree -->
+      <div style="position: absolute; bottom: 40px; left: 280px; text-align: center;">
+        <div style="font-size: 0.7rem; color: #ffcc44; margin-bottom: 4px;">Double jump ↑↑</div>
+        <!-- Canopy -->
+        <div style="width: 55px; height: 28px; background: #2d5a1e; border-radius: 50%; margin: 0 auto; border: 2px solid #1a3a10;"></div>
+        <!-- Trunk -->
+        <div style="width: 14px; height: 115px; background: #5a3a20; margin: 0 auto;"></div>
+        <div style="font-size: 0.75rem; color: #aaa; margin-top: 4px;">Medium (~135px)</div>
+      </div>
+
+      <!-- Tall Tree -->
+      <div style="position: absolute; bottom: 40px; left: 500px; text-align: center;">
+        <div style="font-size: 0.7rem; color: #ff6666; margin-bottom: 4px;">Double jump from height ↑↑</div>
+        <!-- Canopy -->
+        <div style="width: 65px; height: 32px; background: #2d5a1e; border-radius: 50%; margin: 0 auto; border: 2px solid #1a3a10;"></div>
+        <!-- Trunk -->
+        <div style="width: 16px; height: 160px; background: #5a3a20; margin: 0 auto;"></div>
+        <div style="font-size: 0.75rem; color: #aaa; margin-top: 4px;">Tall (~180px)</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 1.5rem;">
+    <h3>Tree Properties</h3>
+    <ul>
+      <li><strong>Spacing:</strong> ~250px apart (tighter than lamps at 300px — more platforming opportunities)</li>
+      <li><strong>Size distribution:</strong> 50% medium, 30% small, 20% tall</li>
+      <li><strong>Platform = canopy top</strong> — player lands on the top of the tree crown</li>
+      <li><strong>Trunk is passthrough</strong> — player can walk/fall through the trunk (not a wall)</li>
+      <li><strong>Pixel-art style</strong> — matches existing game aesthetic (dark trunk, leafy canopy)</li>
+      <li><strong>Rooted to terrain</strong> — tree base sits on <code>getGroundY(worldX)</code>, so they follow the slope</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem;">
+  <h3>Burning Tree Mechanic</h3>
+  <div class="mockup">
+    <div class="mockup-header">Burn Lifecycle (~3.5 seconds / 210 frames)</div>
+    <div class="mockup-body" style="padding: 1.5rem;">
+      <div style="display: flex; gap: 1rem; justify-content: center; align-items: flex-end;">
+
+        <!-- Phase 1: Normal -->
+        <div style="text-align: center; flex: 1;">
+          <div style="width: 50px; height: 25px; background: #2d5a1e; border-radius: 50%; margin: 0 auto;"></div>
+          <div style="width: 10px; height: 80px; background: #5a3a20; margin: 0 auto;"></div>
+          <div style="font-size: 0.75rem; color: #88ff88; margin-top: 0.5rem;"><strong>Normal</strong></div>
+          <div style="font-size: 0.7rem; opacity: 0.7;">Safe platform</div>
+        </div>
+
+        <div style="color: #666; font-size: 1.5rem; align-self: center;">→</div>
+
+        <!-- Phase 2: Ignited -->
+        <div style="text-align: center; flex: 1;">
+          <div style="position: relative;">
+            <div style="width: 50px; height: 25px; background: #5a4a1e; border-radius: 50%; margin: 0 auto; box-shadow: 0 -5px 15px #ff660066;"></div>
+            <div style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); color: #ff6600; font-size: 1.2rem;">🔥</div>
+          </div>
+          <div style="width: 10px; height: 80px; background: #5a3a20; margin: 0 auto;"></div>
+          <div style="font-size: 0.75rem; color: #ffaa00; margin-top: 0.5rem;"><strong>Burning</strong></div>
+          <div style="font-size: 0.7rem; opacity: 0.7;">Still standable<br/>~3.5s timer starts</div>
+        </div>
+
+        <div style="color: #666; font-size: 1.5rem; align-self: center;">→</div>
+
+        <!-- Phase 3: Critical -->
+        <div style="text-align: center; flex: 1;">
+          <div style="position: relative;">
+            <div style="width: 50px; height: 25px; background: #6a2a0a; border-radius: 50%; margin: 0 auto; box-shadow: 0 -8px 20px #ff440088;"></div>
+            <div style="position: absolute; top: -15px; left: 50%; transform: translateX(-50%); color: #ff4400; font-size: 1.5rem;">🔥</div>
+          </div>
+          <div style="width: 10px; height: 80px; background: #4a2210; margin: 0 auto;"></div>
+          <div style="font-size: 0.75rem; color: #ff4400; margin-top: 0.5rem;"><strong>Critical</strong></div>
+          <div style="font-size: 0.7rem; opacity: 0.7;">Flashing warning<br/>Last ~1s</div>
+        </div>
+
+        <div style="color: #666; font-size: 1.5rem; align-self: center;">→</div>
+
+        <!-- Phase 4: Collapsed -->
+        <div style="text-align: center; flex: 1;">
+          <div style="width: 50px; height: 6px; background: #3a2010; margin: 70px auto 0; opacity: 0.5;"></div>
+          <div style="font-size: 0.75rem; color: #666; margin-top: 0.5rem;"><strong>Collapsed</strong></div>
+          <div style="font-size: 0.7rem; opacity: 0.7;">Gone — leaves<br/>ember particles</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 1.5rem;">
+    <h3>Burn Triggers & Details</h3>
+    <ul>
+      <li><strong>Ignition:</strong> Lava raindrop or lava pool contacts the tree</li>
+      <li><strong>Burn timer:</strong> 210 frames (~3.5 seconds) from ignition to collapse</li>
+      <li><strong>Warning phase:</strong> Last 60 frames — canopy flashes red/orange rapidly</li>
+      <li><strong>Collapse:</strong> Tree disappears with falling ember/ash particles</li>
+      <li><strong>Player on burning tree:</strong> Not harmed by standing on it — only loses the platform when it collapses</li>
+      <li><strong>Fire spread:</strong> Does NOT spread between trees (keeps it predictable)</li>
+      <li><strong>Visual:</strong> Flames animate upward from lava contact point, canopy darkens over time</li>
+    </ul>
+  </div>
+</div>

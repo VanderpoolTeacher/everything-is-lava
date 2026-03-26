@@ -1,0 +1,111 @@
+<h2>Level 2-1: Volcano Climb — Full Design</h2>
+<p class="subtitle">Section 4 of 4: Background, Level Flow & Integration</p>
+
+<div class="section">
+  <h3>Destroyed City Background</h3>
+  <div class="mockup">
+    <div class="mockup-header">Parallax Layers (back to front)</div>
+    <div class="mockup-body" style="height: 220px; position: relative; overflow: hidden;">
+      <!-- Sky - dark red/orange volcanic -->
+      <div style="position: absolute; top: 0; left: 0; right: 0; height: 100%; background: linear-gradient(180deg, #1a0505 0%, #3d1111 40%, #5a1a0a 100%);"></div>
+
+      <!-- Far layer - ruined skyline silhouettes (0.1 parallax) -->
+      <div style="position: absolute; bottom: 60px; left: 0; right: 0; height: 120px; display: flex; align-items: flex-end; gap: 20px; padding: 0 10px; opacity: 0.3;">
+        <div style="width: 40px; height: 90px; background: #2a1a1a; clip-path: polygon(0 100%, 0 10%, 30% 0, 60% 5%, 80% 15%, 100% 100%);"></div>
+        <div style="width: 30px; height: 60px; background: #2a1a1a;"></div>
+        <div style="width: 50px; height: 100px; background: #2a1a1a; clip-path: polygon(0 100%, 0 0, 40% 5%, 70% 20%, 100% 10%, 100% 100%);"></div>
+        <div style="width: 25px; height: 40px; background: #2a1a1a;"></div>
+        <div style="width: 45px; height: 80px; background: #2a1a1a; clip-path: polygon(0 100%, 0 15%, 50% 0, 100% 25%, 100% 100%);"></div>
+        <div style="width: 35px; height: 70px; background: #2a1a1a; clip-path: polygon(0 100%, 0 0, 100% 30%, 100% 100%);"></div>
+        <div style="width: 40px; height: 55px; background: #2a1a1a;"></div>
+        <div style="width: 50px; height: 95px; background: #2a1a1a; clip-path: polygon(0 100%, 0 5%, 60% 0, 100% 20%, 100% 100%);"></div>
+      </div>
+
+      <!-- Mid layer - crumbled buildings with lava glow (0.35 parallax) -->
+      <div style="position: absolute; bottom: 60px; left: 0; right: 0; height: 100px; display: flex; align-items: flex-end; gap: 30px; padding: 0 20px; opacity: 0.5;">
+        <div style="width: 60px; height: 70px; background: #3a2020; clip-path: polygon(0 100%, 0 20%, 30% 0, 50% 10%, 70% 5%, 100% 30%, 100% 100%); box-shadow: inset 0 0 10px #ff440033;"></div>
+        <div style="width: 45px; height: 50px; background: #3a2020; box-shadow: inset 0 -5px 10px #ff440022;"></div>
+        <div style="width: 55px; height: 80px; background: #3a2020; clip-path: polygon(0 100%, 0 0, 40% 10%, 100% 40%, 100% 100%); box-shadow: inset 0 0 10px #ff440033;"></div>
+        <div style="width: 40px; height: 35px; background: #3a2020;"></div>
+        <div style="width: 50px; height: 65px; background: #3a2020; clip-path: polygon(0 100%, 0 10%, 60% 0, 100% 30%, 100% 100%);"></div>
+      </div>
+
+      <!-- Lava glow at horizon -->
+      <div style="position: absolute; bottom: 50px; left: 0; right: 0; height: 20px; background: linear-gradient(0deg, #ff440022 0%, transparent 100%);"></div>
+
+      <!-- Ground -->
+      <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(0deg, #3a2515 0%, #4a3020 100%);"></div>
+
+      <!-- Labels -->
+      <div style="position: absolute; top: 8px; right: 10px; font-size: 0.65rem; color: #ff886688;">
+        <div>Far: ruined skyline (0.1x)</div>
+        <div>Mid: crumbled buildings (0.35x)</div>
+        <div>Near: rubble & embers (0.8x)</div>
+        <div>Ground: volcanic rock (1.0x)</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 1rem;">
+    <ul>
+      <li><strong>Sky:</strong> Dark red/black gradient with ash particles drifting down (purely cosmetic)</li>
+      <li><strong>Far layer (0.1x):</strong> Jagged ruined skyline silhouettes — broken rooftops, collapsed towers</li>
+      <li><strong>Mid layer (0.35x):</strong> Crumbled buildings with faint lava glow from cracks. Occasional flickering orange windows (fires still burning)</li>
+      <li><strong>Near layer (0.8x):</strong> Rubble, broken walls, ember particles rising. Replaces the neon signs from 1-x</li>
+      <li><strong>Ground (1.0x):</strong> Dark volcanic rock with lava vein cracks glowing orange. Follows the 15→25° incline</li>
+      <li><strong>Smoke wisps:</strong> Semi-transparent gray particles rising from random ground points</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem;">
+  <h3>Level Flow & Difficulty Curve</h3>
+  <div style="display: flex; gap: 1rem;">
+    <div style="flex: 1; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; border-left: 3px solid #88ff88;">
+      <strong style="color: #88ff88;">First Third (0-1000f)</strong>
+      <ul style="font-size: 0.85rem; margin-top: 0.5rem;">
+        <li>Incline: 15°</li>
+        <li>Lava rain: moderate (every ~40f)</li>
+        <li>Rocks: very rare (every ~150f)</li>
+        <li>Trees: mostly medium, well-spaced</li>
+        <li>Player learns the slope + trees</li>
+      </ul>
+    </div>
+    <div style="flex: 1; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; border-left: 3px solid #ffcc44;">
+      <strong style="color: #ffcc44;">Second Third (1000-2000f)</strong>
+      <ul style="font-size: 0.85rem; margin-top: 0.5rem;">
+        <li>Incline: ~20°</li>
+        <li>Lava rain: increasing (every ~30f)</li>
+        <li>Rocks: occasional (every ~100f)</li>
+        <li>Trees: mixed sizes, some burning</li>
+        <li>Pressure builds</li>
+      </ul>
+    </div>
+    <div style="flex: 1; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; border-left: 3px solid #ff4444;">
+      <strong style="color: #ff4444;">Final Third (2000-3000f)</strong>
+      <ul style="font-size: 0.85rem; margin-top: 0.5rem;">
+        <li>Incline: ~25°</li>
+        <li>Lava rain: heavy (every ~20f)</li>
+        <li>Rocks: frequent (every ~70f)</li>
+        <li>Trees: more tall ones, many burning</li>
+        <li>Peak difficulty before level end</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem;">
+  <h3>Integration with Existing Systems</h3>
+  <ul>
+    <li><strong>Level numbering:</strong> Internally <code>level === 4</code>, displayed as "Level 2-1"</li>
+    <li><strong>Duration:</strong> 3000 frames (50 seconds)</li>
+    <li><strong>Transition in:</strong> Standard level transition screen showing "Level 2-1"</li>
+    <li><strong>Transition out:</strong> Standard <code>levelComplete</code> state → ready for 2-2</li>
+    <li><strong>Vehicles:</strong> None — rocks replace them as the horizontal threat</li>
+    <li><strong>Streetlamps:</strong> None — trees replace them as platforms</li>
+    <li><strong>Konami code:</strong> Press <code>4</code> after code to jump to 2-1</li>
+    <li><strong>Score:</strong> Continues formula: <code>levelTimer/3 + 3000</code> base (level 4 bonus)</li>
+    <li><strong>Music:</strong> Reuse existing track for now — placeholder until new tracks added</li>
+    <li><strong>Lives:</strong> Carry over from 1-3 (or start fresh if entering via Konami)</li>
+  </ul>
+</div>

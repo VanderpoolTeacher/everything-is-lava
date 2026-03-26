@@ -1,0 +1,47 @@
+<h2>Molten Rock Behavior</h2>
+<p class="subtitle">How should rolling rocks interact with the player and environment?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Instant Kill (like vehicles)</h3>
+      <p>Any contact with a rolling rock kills the player instantly — same as getting hit by a vehicle in 1-x levels. Simple, high stakes. Rocks replace vehicles as the main "dodge this" threat.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Knockback + Damage</h3>
+      <p>Rocks push the player backward/downhill and take a life. The knockback creates risk of falling off platforms or into lava pools. Feels more physical — you got hit by a boulder.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Jumpable Obstacle</h3>
+      <p>Rocks kill on side/front contact, but the player can <strong>jump on top</strong> of large rocks to ride them briefly (like a moving platform). Adds a risk/reward element — do you dodge or ride?</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 2rem;">
+  <h3>Rock Size Behavior (from the issue)</h3>
+  <div style="display: flex; gap: 1.5rem; justify-content: center; margin-top: 1rem;">
+    <div style="text-align: center; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; flex: 1;">
+      <div style="width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #ff6600, #cc1100); margin: 0 auto 0.5rem;"></div>
+      <strong>Small</strong>
+      <p style="font-size: 0.85rem; opacity: 0.7;">Fast, easy to jump over</p>
+    </div>
+    <div style="text-align: center; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; flex: 1;">
+      <div style="width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, #ff6600, #cc1100); margin: 0 auto 0.5rem;"></div>
+      <strong>Medium</strong>
+      <p style="font-size: 0.85rem; opacity: 0.7;">Moderate speed & size</p>
+    </div>
+    <div style="text-align: center; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; flex: 1;">
+      <div style="width: 75px; height: 75px; border-radius: 50%; background: linear-gradient(135deg, #ff6600, #cc1100); margin: 0 auto 0.5rem;"></div>
+      <strong>Large</strong>
+      <p style="font-size: 0.85rem; opacity: 0.7;">Slow, hard to jump over</p>
+    </div>
+  </div>
+</div>

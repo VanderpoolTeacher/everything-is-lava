@@ -1,0 +1,30 @@
+<h2>Burning Tree Timer</h2>
+<p class="subtitle">When lava hits a tree, how long before it collapses?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Quick Burn (~2 seconds / 120 frames)</h3>
+      <p>Trees burn fast — barely enough time to land and jump off. High tension. Forces quick reactions and discourages lingering on any platform. Very punishing if you're mid-jump when it ignites.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Medium Burn (~3.5 seconds / 210 frames)</h3>
+      <p>Enough time to land, assess, and jump to the next platform. The fire is a warning — you have a window but can't idle. Feels fair while still creating urgency. Visual flames escalate as the timer counts down.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Slow Burn (~5 seconds / 300 frames)</h3>
+      <p>Generous window. The tree burns visually but stays solid for a while. More forgiving — burning trees are an environmental detail that <em>eventually</em> removes platforms rather than an immediate threat.</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 2rem; padding: 1rem; background: rgba(255,102,0,0.1); border-radius: 8px; border-left: 3px solid #ff6600;">
+  <strong>Context:</strong> At RUN_SPEED 2.5px/frame, a tree stays on screen for roughly 6-7 seconds. A 3.5s burn means the tree could collapse while still visible — adding visual drama. A 2s burn means some trees vanish almost immediately after being hit.
+</div>

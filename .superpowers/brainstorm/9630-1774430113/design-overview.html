@@ -1,0 +1,48 @@
+<h2>Level 2-1: Volcano Climb — Full Design</h2>
+<p class="subtitle">Section 1 of 4: Terrain & Scrolling</p>
+
+<div class="section">
+  <h3>Angled Ground System</h3>
+  <div class="mockup">
+    <div class="mockup-header">Terrain Cross-Section (side view)</div>
+    <div class="mockup-body" style="height: 250px; position: relative; overflow: hidden; background: #1a0a00;">
+      <!-- Sky -->
+      <div style="position: absolute; top: 0; left: 0; right: 0; height: 60px; background: linear-gradient(180deg, #1a0505 0%, #3d1111 100%);"></div>
+
+      <!-- Incline ground -->
+      <svg width="100%" height="250" style="position: absolute; top: 0; left: 0;">
+        <!-- Ground surface -->
+        <polygon points="0,220 800,150 800,250 0,250" fill="#4a3020"/>
+        <polygon points="0,220 800,150 800,155 0,225" fill="#6b4030"/>
+
+        <!-- Lava veins in rock -->
+        <line x1="100" y1="235" x2="200" y2="228" stroke="#ff4400" stroke-width="2" opacity="0.6"/>
+        <line x1="350" y1="220" x2="420" y2="215" stroke="#ff6600" stroke-width="1.5" opacity="0.4"/>
+        <line x1="550" y1="200" x2="650" y2="193" stroke="#ff4400" stroke-width="2" opacity="0.5"/>
+
+        <!-- Player position indicator -->
+        <rect x="120" y="185" width="20" height="25" fill="#4488ff" rx="2"/>
+        <text x="120" y="178" fill="#88bbff" font-size="11">Player</text>
+
+        <!-- Ground Y annotation -->
+        <line x1="50" y1="220" x2="50" y2="150" stroke="#ffcc44" stroke-width="1" stroke-dasharray="4"/>
+        <text x="10" y="185" fill="#ffcc44" font-size="10">~15° rise</text>
+
+        <!-- Arrow showing scroll direction -->
+        <line x1="300" y1="100" x2="500" y2="80" stroke="#88ff88" stroke-width="2"/>
+        <polygon points="500,80 490,75 490,85" fill="#88ff88"/>
+        <text x="350" y="70" fill="#88ff88" font-size="11">Scroll direction →↑</text>
+      </svg>
+    </div>
+  </div>
+
+  <div style="margin-top: 1rem;">
+    <p><strong>Implementation:</strong> Replace flat <code>GROUND_Y</code> with <code>getGroundY(worldX)</code> function:</p>
+    <ul>
+      <li>Base: <code>GROUND_Y - (worldX * tan(15°)) ≈ GROUND_Y - (worldX * 0.267)</code></li>
+      <li>Clamped so ground never goes above ~40% of screen height</li>
+      <li>All collision checks use <code>getGroundY()</code> instead of <code>GROUND_Y</code> constant</li>
+      <li>Scroll offset still increments by <code>RUN_SPEED</code> horizontally — the angled ground creates the climb feel</li>
+    </ul>
+  </div>
+</div>
