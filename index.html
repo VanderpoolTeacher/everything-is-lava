@@ -1331,23 +1331,53 @@ let touchLeft = false;
 let touchRight = false;
 let touchCrouch = false;
 
+// ── NES-STYLE CONTROLLER LAYOUT ──
+// D-pad center position (bottom-left area)
+const DPAD_CX = 110;
+const DPAD_CY_OFFSET = 90; // from bottom
+const DPAD_ARM = 38;  // arm length from center
+const DPAD_W = 34;    // arm width
+const DPAD_HIT = 55;  // hit radius per direction
+
+// A/B button positions (bottom-right area)
+const BTN_R = 32;     // button radius
+const BTN_A_OFFSET_X = 100; // from right edge
+const BTN_B_OFFSET_X = 180; // from right edge
+const BTN_A_OFFSET_Y = 100; // from bottom
+const BTN_B_OFFSET_Y = 130; // from bottom
+
 function getTouchZone(x, y) {
-  // Layout: left half = movement (left quarter + right quarter)
-  //         right half = actions (jump top 70%, crouch bottom 30%)
-  //  ┌─────┬─────┬────────────────────┐
-  //  │     │     │                    │
-  //  │ LEFT│RIGHT│       JUMP         │
-  //  │     │     │                    │
-  //  │     │     ├────────────────────┤
-  //  │     │     │      CROUCH        │
-  //  └─────┴─────┴────────────────────┘
-  const half = W / 2;
-  const quarter = W / 4;
-  if (x >= half) {
-    return y > H * 0.7 ? 'crouch' : 'jump';
+  // D-pad: centered at (DPAD_CX, H - DPAD_CY_OFFSET)
+  const dCx = DPAD_CX;
+  const dCy = H - DPAD_CY_OFFSET;
+  const dx = x - dCx;
+  const dy = y - dCy;
+
+  // Check if touch is in D-pad area
+  if (Math.abs(dx) < DPAD_HIT + 20 && Math.abs(dy) < DPAD_HIT + 20) {
+    // Left arm
+    if (dx < -10 && Math.abs(dy) < DPAD_HIT) return 'left';
+    // Right arm
+    if (dx > 10 && Math.abs(dy) < DPAD_HIT) return 'right';
+    // Down arm (crouch)
+    if (dy > 10 && Math.abs(dx) < DPAD_HIT) return 'crouch';
+    // Up arm (unused but detect)
+    if (dy < -10 && Math.abs(dx) < DPAD_HIT) return 'jump';
   }
-  if (x < quarter) return 'left';
-  return 'right';
+
+  // A button (right, lower) = JUMP
+  const aCx = W - BTN_A_OFFSET_X;
+  const aCy = H - BTN_A_OFFSET_Y;
+  if (Math.hypot(x - aCx, y - aCy) < BTN_R + 20) return 'jump';
+
+  // B button (left of A, slightly higher) = CROUCH/DUCK
+  const bCx = W - BTN_B_OFFSET_X;
+  const bCy = H - BTN_B_OFFSET_Y;
+  if (Math.hypot(x - bCx, y - bCy) < BTN_R + 20) return 'crouch';
+
+  // Fallback: left half = right movement, right half = jump
+  if (x < W / 2) return 'right';
+  return 'jump';
 }
 
 function updateTouchKeys() {
@@ -4394,7 +4424,7 @@ function drawMenu() {
     ctx.fillStyle = '#667788';
     ctx.font = `10px ${GAME_FONT}`;
     if (isMobile) {
-      ctx.fillText('Left/Right  ·  Jump  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
+      ctx.fillText('D-Pad = move  ·  A = jump  ·  B = duck  ·  Dodge the lava!', W / 2, H - 25);
     } else {
       ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
     }
@@ -5245,80 +5275,156 @@ function drawHelpOverlay() {
 // ── MOBILE TOUCH OVERLAY ──
 function drawTouchOverlay() {
   ctx.save();
-  const quarter = W / 4;
-  const half = W / 2;
+  const dCx = DPAD_CX;
+  const dCy = H - DPAD_CY_OFFSET;
+  const arm = DPAD_ARM;
+  const w = DPAD_W;
+  const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
+  const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
 
-  // Zone highlight on press
-  function highlightZone(x, y, w, h, active) {
-    if (active) {
-      ctx.globalAlpha = 0.12;
-      ctx.fillStyle = '#ffaa00';
-      ctx.fillRect(x, y, w, h);
-    }
+  // ── D-PAD (cross shape) ──
+  // Center square
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = '#222222';
+  ctx.fillRect(dCx - w / 2, dCy - arm - w / 2, w, arm * 2 + w); // vertical bar
+  ctx.fillRect(dCx - arm - w / 2, dCy - w / 2, arm * 2 + w, w); // horizontal bar
+
+  // D-pad border
+  ctx.globalAlpha = 0.3;
+  ctx.strokeStyle = '#888888';
+  ctx.lineWidth = 2;
+  // Draw cross outline
+  ctx.beginPath();
+  const hw = w / 2;
+  ctx.moveTo(dCx - hw, dCy - arm - hw);
+  ctx.lineTo(dCx + hw, dCy - arm - hw);
+  ctx.lineTo(dCx + hw, dCy - hw);
+  ctx.lineTo(dCx + arm + hw, dCy - hw);
+  ctx.lineTo(dCx + arm + hw, dCy + hw);
+  ctx.lineTo(dCx + hw, dCy + hw);
+  ctx.lineTo(dCx + hw, dCy + arm + hw);
+  ctx.lineTo(dCx - hw, dCy + arm + hw);
+  ctx.lineTo(dCx - hw, dCy + hw);
+  ctx.lineTo(dCx - arm - hw, dCy + hw);
+  ctx.lineTo(dCx - arm - hw, dCy - hw);
+  ctx.lineTo(dCx - hw, dCy - hw);
+  ctx.closePath();
+  ctx.stroke();
+
+  // Highlight pressed directions
+  // Left
+  if (touchLeft) {
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(dCx - arm - hw, dCy - hw, arm, w);
+  }
+  // Right
+  if (touchRight) {
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(dCx + hw, dCy - hw, arm, w);
+  }
+  // Down (crouch via d-pad)
+  if (hasActiveCrouch) {
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(dCx - hw, dCy + hw, w, arm);
   }
 
-  // Highlight active zones
-  highlightZone(0, 0, quarter, H, touchLeft);
-  highlightZone(quarter, 0, quarter, H, touchRight);
-  const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
-  highlightZone(half, 0, half, H * 0.7, hasActiveJump);
-  const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
-  highlightZone(half, H * 0.7, half, H * 0.3, hasActiveCrouch);
-
-  // Zone divider lines
-  ctx.globalAlpha = 0.08;
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([6, 6]);
-  ctx.beginPath(); ctx.moveTo(quarter, H * 0.35); ctx.lineTo(quarter, H); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(half, H * 0.35); ctx.lineTo(half, H); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(half, H * 0.7); ctx.lineTo(W, H * 0.7); ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Arrow icons centered in each zone
+  // D-pad arrows
   ctx.textAlign = 'center';
-  const iconAlpha = 0.2;
-  const activeAlpha = 0.5;
-  const iconY = H * 0.78;
-
-  // LEFT arrow — centered in left quarter
-  ctx.globalAlpha = touchLeft ? activeAlpha : iconAlpha;
-  ctx.fillStyle = touchLeft ? '#ffcc44' : '#ffffff';
+  ctx.textBaseline = 'middle';
+  // Left arrow
+  ctx.globalAlpha = touchLeft ? 0.7 : 0.35;
+  ctx.fillStyle = touchLeft ? '#ffcc44' : '#cccccc';
   ctx.beginPath();
-  const lx = quarter / 2;
-  ctx.moveTo(lx - 20, iconY); ctx.lineTo(lx + 14, iconY - 18); ctx.lineTo(lx + 14, iconY + 18);
+  ctx.moveTo(dCx - arm + 2, dCy);
+  ctx.lineTo(dCx - arm + 18, dCy - 9);
+  ctx.lineTo(dCx - arm + 18, dCy + 9);
   ctx.fill();
-  ctx.font = `10px ${GAME_FONT}`;
-  ctx.fillText('LEFT', lx, iconY + 35);
-
-  // RIGHT arrow — centered in second quarter
-  ctx.globalAlpha = touchRight ? activeAlpha : iconAlpha;
-  ctx.fillStyle = touchRight ? '#ffcc44' : '#ffffff';
+  // Right arrow
+  ctx.globalAlpha = touchRight ? 0.7 : 0.35;
+  ctx.fillStyle = touchRight ? '#ffcc44' : '#cccccc';
   ctx.beginPath();
-  const rx = quarter * 1.5;
-  ctx.moveTo(rx + 20, iconY); ctx.lineTo(rx - 14, iconY - 18); ctx.lineTo(rx - 14, iconY + 18);
+  ctx.moveTo(dCx + arm - 2, dCy);
+  ctx.lineTo(dCx + arm - 18, dCy - 9);
+  ctx.lineTo(dCx + arm - 18, dCy + 9);
   ctx.fill();
-  ctx.fillText('RIGHT', rx, iconY + 35);
-
-  // JUMP up arrow — centered in right half top
-  const jx = half + half / 2;
-  const jy = H * 0.45;
-  ctx.globalAlpha = hasActiveJump ? activeAlpha : iconAlpha;
-  ctx.fillStyle = hasActiveJump ? '#ffcc44' : '#ffffff';
+  // Down arrow
+  ctx.globalAlpha = hasActiveCrouch ? 0.7 : 0.35;
+  ctx.fillStyle = hasActiveCrouch ? '#ffcc44' : '#cccccc';
   ctx.beginPath();
-  ctx.moveTo(jx, jy - 20); ctx.lineTo(jx - 18, jy + 12); ctx.lineTo(jx + 18, jy + 12);
+  ctx.moveTo(dCx, dCy + arm - 2);
+  ctx.lineTo(dCx - 9, dCy + arm - 18);
+  ctx.lineTo(dCx + 9, dCy + arm - 18);
   ctx.fill();
-  ctx.fillText('JUMP', jx, jy + 30);
-
-  // DUCK down arrow — centered in right half bottom
-  const dy = H * 0.85;
-  ctx.globalAlpha = hasActiveCrouch ? activeAlpha : iconAlpha;
-  ctx.fillStyle = hasActiveCrouch ? '#ffcc44' : '#ffffff';
+  // Up arrow
+  ctx.globalAlpha = 0.2;
+  ctx.fillStyle = '#cccccc';
   ctx.beginPath();
-  ctx.moveTo(jx, dy + 16); ctx.lineTo(jx - 16, dy - 8); ctx.lineTo(jx + 16, dy - 8);
+  ctx.moveTo(dCx, dCy - arm + 2);
+  ctx.lineTo(dCx - 9, dCy - arm + 18);
+  ctx.lineTo(dCx + 9, dCy - arm + 18);
   ctx.fill();
-  ctx.fillText('DUCK', jx, dy - 18);
 
+  // ── A BUTTON (right, red) — JUMP ──
+  const aCx = W - BTN_A_OFFSET_X;
+  const aCy = H - BTN_A_OFFSET_Y;
+  // Shadow
+  ctx.globalAlpha = 0.15;
+  ctx.beginPath();
+  ctx.arc(aCx, aCy + 3, BTN_R + 2, 0, Math.PI * 2);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  // Button face
+  ctx.globalAlpha = hasActiveJump ? 0.55 : 0.25;
+  ctx.beginPath();
+  ctx.arc(aCx, aCy, BTN_R, 0, Math.PI * 2);
+  ctx.fillStyle = hasActiveJump ? '#cc2222' : '#991111';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = hasActiveJump ? '#ff4444' : 'rgba(255,100,100,0.4)';
+  ctx.stroke();
+  // "A" label
+  ctx.globalAlpha = hasActiveJump ? 0.9 : 0.5;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 18px ${GAME_FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('A', aCx, aCy + 1);
+
+  // ── B BUTTON (left of A, blue) — DUCK ──
+  const bCx = W - BTN_B_OFFSET_X;
+  const bCy = H - BTN_B_OFFSET_Y;
+  // Shadow
+  ctx.globalAlpha = 0.15;
+  ctx.beginPath();
+  ctx.arc(bCx, bCy + 3, BTN_R + 2, 0, Math.PI * 2);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  // Button face
+  ctx.globalAlpha = hasActiveCrouch ? 0.55 : 0.25;
+  ctx.beginPath();
+  ctx.arc(bCx, bCy, BTN_R, 0, Math.PI * 2);
+  ctx.fillStyle = hasActiveCrouch ? '#2244cc' : '#112288';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = hasActiveCrouch ? '#4466ff' : 'rgba(100,130,255,0.4)';
+  ctx.stroke();
+  // "B" label
+  ctx.globalAlpha = hasActiveCrouch ? 0.9 : 0.5;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 18px ${GAME_FONT}`;
+  ctx.fillText('B', bCx, bCy + 1);
+
+  // Function labels below buttons
+  ctx.globalAlpha = 0.3;
+  ctx.font = `8px ${GAME_FONT}`;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('JUMP', aCx, aCy + BTN_R + 14);
+  ctx.fillText('DUCK', bCx, bCy + BTN_R + 14);
+
+  ctx.textBaseline = 'alphabetic';
   ctx.restore();
 }
 
