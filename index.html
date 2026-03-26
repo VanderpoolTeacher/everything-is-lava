@@ -1332,33 +1332,21 @@ let touchRight = false;
 let touchCrouch = false;
 
 function getTouchZone(x, y) {
-  // Button-based zones matching drawTouchOverlay positions
-  const btnR = 36;
-  const pad = 28;
-  const bottomY = H - pad - btnR;
-  const dpadCx = pad + btnR + 10;
-  const hitR = btnR + 18; // generous hit area for thumbs
-
-  // Left button
-  const lbx = dpadCx - btnR - 14;
-  if (Math.hypot(x - lbx, y - bottomY) < hitR) return 'left';
-
-  // Right button
-  const rbx = dpadCx + btnR + 14;
-  if (Math.hypot(x - rbx, y - bottomY) < hitR) return 'right';
-
-  // Jump button (right side, upper)
-  const jumpCx = W - pad - btnR - 10;
-  const jumpCy = bottomY - btnR - 14;
-  if (Math.hypot(x - jumpCx, y - jumpCy) < hitR) return 'jump';
-
-  // Crouch button (right side, lower)
-  const crouchCy = bottomY + 8;
-  if (Math.hypot(x - jumpCx, y - crouchCy) < hitR) return 'crouch';
-
-  // Fallback: left half = move right, right half = jump
-  if (x < W / 2) return 'right';
-  return 'jump';
+  // Full-screen zones for easy thumb control:
+  //  ┌──────────┬──────────┬──────────┐
+  //  │          │          │          │
+  //  │   LEFT   │  RIGHT   │   JUMP   │
+  //  │          │          │          │
+  //  │          │          ├──────────┤
+  //  │          │          │  CROUCH  │
+  //  └──────────┴──────────┴──────────┘
+  const third = W / 3;
+  if (x >= third * 2) {
+    // Right third: jump (top 70%) or crouch (bottom 30%)
+    return y > H * 0.7 ? 'crouch' : 'jump';
+  }
+  if (x < third) return 'left';
+  return 'right';
 }
 
 function updateTouchKeys() {
@@ -5256,89 +5244,81 @@ function drawHelpOverlay() {
 // ── MOBILE TOUCH OVERLAY ──
 function drawTouchOverlay() {
   ctx.save();
-  const btnR = 36; // button radius
-  const pad = 28;  // padding from screen edges
-  const bottomY = H - pad - btnR;
+  const third = W / 3;
 
-  // Helper: draw a circular button with icon
-  function drawBtn(cx, cy, active, iconFn, size) {
-    const r = size || btnR;
-    // Outer circle (border)
-    ctx.globalAlpha = active ? 0.45 : 0.2;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fillStyle = active ? 'rgba(255,170,0,0.35)' : 'rgba(255,255,255,0.08)';
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = active ? '#ffaa00' : 'rgba(255,255,255,0.35)';
-    ctx.stroke();
-    // Icon inside
-    ctx.globalAlpha = active ? 0.85 : 0.45;
-    ctx.fillStyle = active ? '#ffcc44' : '#ffffff';
-    iconFn(cx, cy);
+  // Zone highlight on press
+  function highlightZone(x, y, w, h, active) {
+    if (active) {
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = '#ffaa00';
+      ctx.fillRect(x, y, w, h);
+    }
   }
 
-  // ── D-pad: bottom-left ──
-  const dpadCx = pad + btnR + 10;
-  const dpadCy = bottomY;
-
-  // Fast button (double chevron >>)
-  drawBtn(dpadCx - btnR - 14, dpadCy, touchLeft, (cx, cy) => {
-    ctx.strokeStyle = touchLeft ? '#ffcc44' : '#ffffff';
-    ctx.lineWidth = 3;
-    for (let i = 0; i < 2; i++) {
-      const ox = -6 + i * 13;
-      ctx.beginPath();
-      ctx.moveTo(cx + ox - 4, cy - 10);
-      ctx.lineTo(cx + ox + 7, cy);
-      ctx.lineTo(cx + ox - 4, cy + 10);
-      ctx.stroke();
-    }
-  }, btnR);
-
-  // Slow button (double chevron <<)
-  drawBtn(dpadCx + btnR + 14, dpadCy, touchRight, (cx, cy) => {
-    ctx.strokeStyle = touchRight ? '#ffcc44' : '#ffffff';
-    ctx.lineWidth = 3;
-    for (let i = 0; i < 2; i++) {
-      const ox = 6 - i * 13;
-      ctx.beginPath();
-      ctx.moveTo(cx + ox + 4, cy - 10);
-      ctx.lineTo(cx + ox - 7, cy);
-      ctx.lineTo(cx + ox + 4, cy + 10);
-      ctx.stroke();
-    }
-  }, btnR);
-
-  // ── JUMP button: bottom-right, large ──
+  // Highlight active zones
+  highlightZone(0, 0, third, H, touchLeft);
+  highlightZone(third, 0, third, H, touchRight);
   const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
-  const jumpCx = W - pad - btnR - 10;
-  const jumpCy = bottomY - btnR - 14;
-  drawBtn(jumpCx, jumpCy, hasActiveJump, (cx, cy) => {
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - 16); ctx.lineTo(cx - 15, cy + 9); ctx.lineTo(cx + 15, cy + 9);
-    ctx.fill();
-  }, btnR);
-
-  // ── CROUCH button: bottom-right, below jump ──
+  highlightZone(third * 2, 0, third, H * 0.7, hasActiveJump);
   const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
-  const crouchCx = jumpCx;
-  const crouchCy = bottomY + 8;
-  drawBtn(crouchCx, crouchCy, hasActiveCrouch, (cx, cy) => {
-    ctx.beginPath();
-    ctx.moveTo(cx, cy + 14); ctx.lineTo(cx - 15, cy - 9); ctx.lineTo(cx + 15, cy - 9);
-    ctx.fill();
-  }, btnR - 4);
+  highlightZone(third * 2, H * 0.7, third, H * 0.3, hasActiveCrouch);
 
-  // ── Labels ──
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `8px ${GAME_FONT}`;
+  // Zone divider lines
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 6]);
+  // Left | Right divider
+  ctx.beginPath(); ctx.moveTo(third, H * 0.35); ctx.lineTo(third, H); ctx.stroke();
+  // Right | Jump divider
+  ctx.beginPath(); ctx.moveTo(third * 2, H * 0.35); ctx.lineTo(third * 2, H); ctx.stroke();
+  // Jump | Crouch divider
+  ctx.beginPath(); ctx.moveTo(third * 2, H * 0.7); ctx.lineTo(W, H * 0.7); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Arrow icons in each zone (centered, large)
   ctx.textAlign = 'center';
-  ctx.fillText('FAST', dpadCx - btnR - 14, dpadCy - btnR - 8);
-  ctx.fillText('SLOW', dpadCx + btnR + 14, dpadCy - btnR - 8);
-  ctx.fillText('JUMP', jumpCx, jumpCy - btnR - 8);
-  ctx.fillText('DUCK', crouchCx, crouchCy + btnR + 14);
+  const iconAlpha = 0.2;
+  const activeAlpha = 0.5;
+  const iconY = H * 0.78;
+
+  // LEFT arrow
+  ctx.globalAlpha = touchLeft ? activeAlpha : iconAlpha;
+  ctx.fillStyle = touchLeft ? '#ffcc44' : '#ffffff';
+  ctx.beginPath();
+  const lx = third / 2;
+  ctx.moveTo(lx - 20, iconY); ctx.lineTo(lx + 14, iconY - 18); ctx.lineTo(lx + 14, iconY + 18);
+  ctx.fill();
+  ctx.font = `10px ${GAME_FONT}`;
+  ctx.fillText('LEFT', lx, iconY + 35);
+
+  // RIGHT arrow
+  ctx.globalAlpha = touchRight ? activeAlpha : iconAlpha;
+  ctx.fillStyle = touchRight ? '#ffcc44' : '#ffffff';
+  ctx.beginPath();
+  const rx = third * 1.5;
+  ctx.moveTo(rx + 20, iconY); ctx.lineTo(rx - 14, iconY - 18); ctx.lineTo(rx - 14, iconY + 18);
+  ctx.fill();
+  ctx.fillText('RIGHT', rx, iconY + 35);
+
+  // JUMP up arrow
+  const jx = third * 2 + third / 2;
+  const jy = H * 0.45;
+  ctx.globalAlpha = hasActiveJump ? activeAlpha : iconAlpha;
+  ctx.fillStyle = hasActiveJump ? '#ffcc44' : '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(jx, jy - 20); ctx.lineTo(jx - 18, jy + 12); ctx.lineTo(jx + 18, jy + 12);
+  ctx.fill();
+  ctx.fillText('JUMP', jx, jy + 30);
+
+  // DUCK down arrow
+  const dy = H * 0.85;
+  ctx.globalAlpha = hasActiveCrouch ? activeAlpha : iconAlpha;
+  ctx.fillStyle = hasActiveCrouch ? '#ffcc44' : '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(jx, dy + 16); ctx.lineTo(jx - 16, dy - 8); ctx.lineTo(jx + 16, dy - 8);
+  ctx.fill();
+  ctx.fillText('DUCK', jx, dy - 18);
 
   ctx.restore();
 }
