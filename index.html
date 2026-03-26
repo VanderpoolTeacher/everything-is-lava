@@ -2,21 +2,27 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Everything is Lava</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
+  html, body {
     background: #0a0a1a;
     display: flex;
     justify-content: center;
     align-items: center;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    overscroll-behavior: none;
   }
   canvas { display: block; border-radius: 4px; }
 </style>
@@ -27,8 +33,41 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-const W = canvas.width = Math.min(900, window.innerWidth - 20);
-const H = canvas.height = Math.min(550, window.innerHeight - 20);
+// ── MOBILE DETECTION & RESPONSIVE CANVAS ──
+const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+  || ('ontouchstart' in window && navigator.maxTouchPoints > 1);
+
+// On mobile: fill the screen. On desktop: cap at 900×550
+let W, H;
+function sizeCanvas() {
+  if (isMobile) {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  } else {
+    W = canvas.width = Math.min(900, window.innerWidth - 20);
+    H = canvas.height = Math.min(550, window.innerHeight - 20);
+  }
+}
+sizeCanvas();
+window.addEventListener('resize', () => {
+  sizeCanvas();
+  GROUND_Y = H - 60;
+  generateBuildings();
+  generateStreetLamps();
+});
+// Auto-fullscreen on mobile when game starts (called once on first tap)
+let mobileFullscreenRequested = false;
+function requestMobileFullscreen() {
+  if (!isMobile || mobileFullscreenRequested) return;
+  mobileFullscreenRequested = true;
+  const el = document.documentElement;
+  const rfs = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if (rfs) rfs.call(el).catch(() => {});
+  // Lock to landscape if supported
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('landscape').catch(() => {});
+  }
+}
 
 // ── CONSTANTS ──
 const GAME_FONT = "'Press Start 2P', monospace";
@@ -49,10 +88,10 @@ const FONT_24B = `bold 24px ${GAME_FONT}`;
 const FONT_28B = `bold 28px ${GAME_FONT}`;
 const FONT_36B = `bold 36px ${GAME_FONT}`;
 const FONT_42B = `bold 42px ${GAME_FONT}`;
-const MAX_PARTICLES = 150;
+const MAX_PARTICLES = isMobile ? 60 : 150;
 const GRAVITY = 0.55;
 const JUMP_FORCE = -11.5;
-const GROUND_Y = H - 60; // street level
+let GROUND_Y = H - 60; // street level
 const PLAYER_SPEED = 4.5;
 const RUN_SPEED = 2.5; // world scroll speed
 
@@ -170,6 +209,8 @@ applyMasterVolume(); // apply initial 50% volume
 let audioCtx = null;
 function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  // iOS/Safari requires resume after user gesture
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   return audioCtx;
 }
 
@@ -1281,25 +1322,103 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
-canvas.addEventListener('touchstart', e => {
-  e.preventDefault();
+// ── MOBILE TOUCH CONTROLS ──
+// Touch zones: left side = move left/right, right side = jump
+// Tracks active touches for multi-touch support
+const activeTouches = {}; // touchId -> { zone: 'left'|'right'|'jump'|'crouch', x, y }
+let touchLeft = false;
+let touchRight = false;
+let touchCrouch = false;
+
+function getTouchZone(x, y) {
+  // During gameplay: left third = move left, middle-left = move right, right half = jump
+  // Bottom-right corner = crouch
+  const thirdW = W / 3;
+  if (x < thirdW) return 'left';
+  if (x < thirdW * 2) return 'right';
+  if (y > H * 0.7) return 'crouch';
+  return 'jump';
+}
+
+function updateTouchKeys() {
+  touchLeft = false;
+  touchRight = false;
+  touchCrouch = false;
+  for (const id in activeTouches) {
+    const t = activeTouches[id];
+    if (t.zone === 'left') touchLeft = true;
+    if (t.zone === 'right') touchRight = true;
+    if (t.zone === 'crouch') touchCrouch = true;
+  }
+  keys['ArrowLeft'] = touchLeft;
+  keys['ArrowRight'] = touchRight;
+  if (touchCrouch) keys['ArrowDown'] = true; else if (isMobile) keys['ArrowDown'] = false;
+}
+
+function handleTouchStartForMenu(e) {
   // First touch on menu — just start music
   if (gameState === 'menu' && !titleMusicUnlocked) {
     titleMusicUnlocked = true;
     titleMusic.currentTime = 0;
     titleMusic.play().catch(() => {});
-    return;
+    return true;
   }
-  if (gameState === 'transition') return;
-  if (gameState === 'victory' && !storyScrollDone) return;
-  if (gameState === 'victory') { clearGameState(); gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return; }
-  if (gameState === 'dead' && deathTimer < DEATH_RESTART_DELAY) return;
-  if (gameState === 'gameover' && !gameOverScrollDone) return;
-  if (gameState === 'dead') { respawnPlayer(); return; }
-  if (gameState === 'gameover') { startGame(); return; }
-  if (gameState !== 'playing' && gameState !== 'dojo') { startGame(); return; }
-  jumpBuffered = true;
+  if (gameState === 'transition') return true;
+  if (gameState === 'victory' && !storyScrollDone) return true;
+  if (gameState === 'victory') { clearGameState(); gameState = 'menu'; menuScrollY = -480; titleMusic.currentTime = 0; titleMusic.play().catch(() => {}); return true; }
+  if (gameState === 'dead' && deathTimer < DEATH_RESTART_DELAY) return true;
+  if (gameState === 'gameover' && !gameOverScrollDone) return true;
+  if (gameState === 'dead') { respawnPlayer(); return true; }
+  if (gameState === 'gameover') { startGame(); return true; }
+  if (gameState !== 'playing' && gameState !== 'dojo') { startGame(); return true; }
+  return false;
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (handleTouchStartForMenu(e)) return;
+
+  // During gameplay — multi-touch zones
+  for (const touch of e.changedTouches) {
+    const rect = canvas.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    const zone = getTouchZone(x, y);
+    activeTouches[touch.identifier] = { zone, x, y };
+    if (zone === 'jump') jumpBuffered = true;
+  }
+  updateTouchKeys();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    if (activeTouches[touch.identifier]) {
+      const rect = canvas.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+      const newZone = getTouchZone(x, y);
+      activeTouches[touch.identifier] = { zone: newZone, x, y };
+    }
+  }
+  updateTouchKeys();
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    delete activeTouches[touch.identifier];
+  }
+  updateTouchKeys();
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', e => {
+  for (const touch of e.changedTouches) {
+    delete activeTouches[touch.identifier];
+  }
+  updateTouchKeys();
 });
+
 canvas.addEventListener('mousedown', () => {
   // First click on menu — just start music
   if (gameState === 'menu' && !titleMusicUnlocked) {
@@ -1351,6 +1470,7 @@ function clearGameState() {
 }
 
 function startGame() {
+  requestMobileFullscreen();
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
     level = Math.min(level + 1, 3);
@@ -4243,14 +4363,24 @@ function drawMenu() {
     ctx.globalAlpha = titleAlpha * pulse;
     ctx.fillStyle = '#ffaa66';
     ctx.font = `16px ${GAME_FONT}`;
-    ctx.fillText(titleMusicUnlocked ? 'Press SPACE to start' : 'Press any key', W / 2, H - 50);
+    if (isMobile) {
+      ctx.fillText(titleMusicUnlocked ? 'TAP TO START' : 'TAP TO BEGIN', W / 2, H - 50);
+    } else {
+      ctx.fillText(titleMusicUnlocked ? 'Press SPACE to start' : 'Press any key', W / 2, H - 50);
+    }
     ctx.globalAlpha = titleAlpha;
     ctx.fillStyle = '#667788';
     ctx.font = `10px ${GAME_FONT}`;
-    ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
+    if (isMobile) {
+      ctx.fillText('Left = move left  ·  Center = right  ·  Right = jump', W / 2, H - 25);
+    } else {
+      ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
+    }
     ctx.fillStyle = '#556677';
     ctx.font = `9px ${GAME_FONT}`;
-    ctx.fillText('Type GGD to enter the Dojo  ·  Type OG for the original', W / 2, H - 10);
+    if (!isMobile) {
+      ctx.fillText('Type GGD to enter the Dojo  ·  Type OG for the original', W / 2, H - 10);
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -5031,6 +5161,32 @@ const HELP_LINES = [
   { label: 'WATER',        keys: 'O  (dojo)' },
   { label: 'TRIAL',        keys: 'T  (dojo)' },
 ];
+// ── PORTRAIT MODE WARNING ──
+function drawPortraitWarning() {
+  if (!isMobile || W >= H) return; // landscape or desktop = no warning
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffaa00';
+  ctx.font = `18px ${GAME_FONT}`;
+  ctx.textAlign = 'center';
+  ctx.fillText('ROTATE', W / 2, H / 2 - 30);
+  ctx.fillText('YOUR DEVICE', W / 2, H / 2 + 5);
+  ctx.fillStyle = '#888';
+  ctx.font = `11px ${GAME_FONT}`;
+  ctx.fillText('Landscape mode required', W / 2, H / 2 + 45);
+  // Rotating phone icon
+  const angle = Math.sin(frameCount * 0.04) * 0.3;
+  ctx.translate(W / 2, H / 2 + 90);
+  ctx.rotate(angle);
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-18, -28, 36, 56);
+  ctx.fillStyle = '#444';
+  ctx.fillRect(-14, -22, 28, 44);
+  ctx.restore();
+}
+
 function drawHelpOverlay() {
   // Dim background
   ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
@@ -5064,6 +5220,61 @@ function drawHelpOverlay() {
 }
 
 // ── MAIN DRAW ──
+// ── MOBILE TOUCH OVERLAY ──
+function drawTouchOverlay() {
+  ctx.save();
+  ctx.globalAlpha = 0.15;
+  const thirdW = W / 3;
+
+  // Left zone — arrow left
+  ctx.fillStyle = touchLeft ? '#ffaa00' : '#ffffff';
+  ctx.globalAlpha = touchLeft ? 0.25 : 0.1;
+  ctx.beginPath();
+  const lx = thirdW / 2, ly = H * 0.75;
+  ctx.moveTo(lx - 22, ly); ctx.lineTo(lx + 12, ly - 18); ctx.lineTo(lx + 12, ly + 18);
+  ctx.fill();
+
+  // Right zone — arrow right
+  ctx.fillStyle = touchRight ? '#ffaa00' : '#ffffff';
+  ctx.globalAlpha = touchRight ? 0.25 : 0.1;
+  ctx.beginPath();
+  const rx = thirdW * 1.5, ry = H * 0.75;
+  ctx.moveTo(rx + 22, ry); ctx.lineTo(rx - 12, ry - 18); ctx.lineTo(rx - 12, ry + 18);
+  ctx.fill();
+
+  // Jump zone — up arrow
+  const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
+  ctx.fillStyle = hasActiveJump ? '#ffaa00' : '#ffffff';
+  ctx.globalAlpha = hasActiveJump ? 0.25 : 0.1;
+  ctx.beginPath();
+  const jx = W * 0.78, jy = H * 0.55;
+  ctx.moveTo(jx, jy - 24); ctx.lineTo(jx - 20, jy + 10); ctx.lineTo(jx + 20, jy + 10);
+  ctx.fill();
+
+  // Labels
+  ctx.globalAlpha = 0.2;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `9px ${GAME_FONT}`;
+  ctx.textAlign = 'center';
+  ctx.fillText('LEFT', thirdW / 2, H - 15);
+  ctx.fillText('RIGHT', thirdW * 1.5, H - 15);
+  ctx.fillText('JUMP', W * 0.78, H * 0.55 + 35);
+  ctx.fillText('DUCK', W - 40, H - 15);
+
+  // Divider lines (subtle)
+  ctx.globalAlpha = 0.06;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(thirdW, H * 0.5); ctx.lineTo(thirdW, H);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(thirdW * 2, H * 0.5); ctx.lineTo(thirdW * 2, H);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function draw() {
   ctx.save();
 
@@ -5156,8 +5367,14 @@ function draw() {
     ctx.globalAlpha = 1;
   }
 
+  // Mobile touch overlay (during gameplay only)
+  if (isMobile && (gameState === 'playing' || gameState === 'dojo')) drawTouchOverlay();
+
   // Help overlay (draws on top of everything)
   if (showHelpOverlay) drawHelpOverlay();
+
+  // Portrait mode warning (absolute top layer)
+  drawPortraitWarning();
 }
 
 // ── GAME LOOP ──
