@@ -1332,20 +1332,21 @@ let touchRight = false;
 let touchCrouch = false;
 
 function getTouchZone(x, y) {
-  // Full-screen zones for easy thumb control:
-  //  ┌──────────┬──────────┬──────────┐
-  //  │          │          │          │
-  //  │   LEFT   │  RIGHT   │   JUMP   │
-  //  │          │          │          │
-  //  │          │          ├──────────┤
-  //  │          │          │  CROUCH  │
-  //  └──────────┴──────────┴──────────┘
-  const third = W / 3;
-  if (x >= third * 2) {
-    // Right third: jump (top 70%) or crouch (bottom 30%)
+  // Layout: left half = movement (left quarter + right quarter)
+  //         right half = actions (jump top 70%, crouch bottom 30%)
+  //  ┌─────┬─────┬────────────────────┐
+  //  │     │     │                    │
+  //  │ LEFT│RIGHT│       JUMP         │
+  //  │     │     │                    │
+  //  │     │     ├────────────────────┤
+  //  │     │     │      CROUCH        │
+  //  └─────┴─────┴────────────────────┘
+  const half = W / 2;
+  const quarter = W / 4;
+  if (x >= half) {
     return y > H * 0.7 ? 'crouch' : 'jump';
   }
-  if (x < third) return 'left';
+  if (x < quarter) return 'left';
   return 'right';
 }
 
@@ -4393,7 +4394,7 @@ function drawMenu() {
     ctx.fillStyle = '#667788';
     ctx.font = `10px ${GAME_FONT}`;
     if (isMobile) {
-      ctx.fillText('Fast/Slow = speed  ·  Jump  ·  Duck  ·  Dodge the lava!', W / 2, H - 25);
+      ctx.fillText('Left/Right  ·  Jump  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
     } else {
       ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
     }
@@ -5244,7 +5245,8 @@ function drawHelpOverlay() {
 // ── MOBILE TOUCH OVERLAY ──
 function drawTouchOverlay() {
   ctx.save();
-  const third = W / 3;
+  const quarter = W / 4;
+  const half = W / 2;
 
   // Zone highlight on press
   function highlightZone(x, y, w, h, active) {
@@ -5256,53 +5258,50 @@ function drawTouchOverlay() {
   }
 
   // Highlight active zones
-  highlightZone(0, 0, third, H, touchLeft);
-  highlightZone(third, 0, third, H, touchRight);
+  highlightZone(0, 0, quarter, H, touchLeft);
+  highlightZone(quarter, 0, quarter, H, touchRight);
   const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
-  highlightZone(third * 2, 0, third, H * 0.7, hasActiveJump);
+  highlightZone(half, 0, half, H * 0.7, hasActiveJump);
   const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
-  highlightZone(third * 2, H * 0.7, third, H * 0.3, hasActiveCrouch);
+  highlightZone(half, H * 0.7, half, H * 0.3, hasActiveCrouch);
 
   // Zone divider lines
   ctx.globalAlpha = 0.08;
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = 1;
   ctx.setLineDash([6, 6]);
-  // Left | Right divider
-  ctx.beginPath(); ctx.moveTo(third, H * 0.35); ctx.lineTo(third, H); ctx.stroke();
-  // Right | Jump divider
-  ctx.beginPath(); ctx.moveTo(third * 2, H * 0.35); ctx.lineTo(third * 2, H); ctx.stroke();
-  // Jump | Crouch divider
-  ctx.beginPath(); ctx.moveTo(third * 2, H * 0.7); ctx.lineTo(W, H * 0.7); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(quarter, H * 0.35); ctx.lineTo(quarter, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(half, H * 0.35); ctx.lineTo(half, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(half, H * 0.7); ctx.lineTo(W, H * 0.7); ctx.stroke();
   ctx.setLineDash([]);
 
-  // Arrow icons in each zone (centered, large)
+  // Arrow icons centered in each zone
   ctx.textAlign = 'center';
   const iconAlpha = 0.2;
   const activeAlpha = 0.5;
   const iconY = H * 0.78;
 
-  // LEFT arrow
+  // LEFT arrow — centered in left quarter
   ctx.globalAlpha = touchLeft ? activeAlpha : iconAlpha;
   ctx.fillStyle = touchLeft ? '#ffcc44' : '#ffffff';
   ctx.beginPath();
-  const lx = third / 2;
+  const lx = quarter / 2;
   ctx.moveTo(lx - 20, iconY); ctx.lineTo(lx + 14, iconY - 18); ctx.lineTo(lx + 14, iconY + 18);
   ctx.fill();
   ctx.font = `10px ${GAME_FONT}`;
   ctx.fillText('LEFT', lx, iconY + 35);
 
-  // RIGHT arrow
+  // RIGHT arrow — centered in second quarter
   ctx.globalAlpha = touchRight ? activeAlpha : iconAlpha;
   ctx.fillStyle = touchRight ? '#ffcc44' : '#ffffff';
   ctx.beginPath();
-  const rx = third * 1.5;
+  const rx = quarter * 1.5;
   ctx.moveTo(rx + 20, iconY); ctx.lineTo(rx - 14, iconY - 18); ctx.lineTo(rx - 14, iconY + 18);
   ctx.fill();
   ctx.fillText('RIGHT', rx, iconY + 35);
 
-  // JUMP up arrow
-  const jx = third * 2 + third / 2;
+  // JUMP up arrow — centered in right half top
+  const jx = half + half / 2;
   const jy = H * 0.45;
   ctx.globalAlpha = hasActiveJump ? activeAlpha : iconAlpha;
   ctx.fillStyle = hasActiveJump ? '#ffcc44' : '#ffffff';
@@ -5311,7 +5310,7 @@ function drawTouchOverlay() {
   ctx.fill();
   ctx.fillText('JUMP', jx, jy + 30);
 
-  // DUCK down arrow
+  // DUCK down arrow — centered in right half bottom
   const dy = H * 0.85;
   ctx.globalAlpha = hasActiveCrouch ? activeAlpha : iconAlpha;
   ctx.fillStyle = hasActiveCrouch ? '#ffcc44' : '#ffffff';
