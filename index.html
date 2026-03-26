@@ -1331,12 +1331,32 @@ let touchRight = false;
 let touchCrouch = false;
 
 function getTouchZone(x, y) {
-  // During gameplay: left third = move left, middle-left = move right, right half = jump
-  // Bottom-right corner = crouch
-  const thirdW = W / 3;
-  if (x < thirdW) return 'left';
-  if (x < thirdW * 2) return 'right';
-  if (y > H * 0.7) return 'crouch';
+  // Button-based zones: left side = d-pad (left/right), right side = jump/crouch
+  const btnR = 32;
+  const pad = 24;
+  const bottomY = H - pad - btnR;
+  const dpadCx = pad + btnR + 10;
+  const hitR = btnR + 16; // generous hit area
+
+  // Left button
+  const lbx = dpadCx - btnR - 12;
+  if (Math.hypot(x - lbx, y - bottomY) < hitR) return 'left';
+
+  // Right button
+  const rbx = dpadCx + btnR + 12;
+  if (Math.hypot(x - rbx, y - bottomY) < hitR) return 'right';
+
+  // Jump button (top-right)
+  const jumpCx = W - pad - btnR - 10;
+  const jumpCy = bottomY - btnR - 16;
+  if (Math.hypot(x - jumpCx, y - jumpCy) < hitR) return 'jump';
+
+  // Crouch button (bottom-right)
+  const crouchCy = bottomY + 6;
+  if (Math.hypot(x - jumpCx, y - crouchCy) < hitR) return 'crouch';
+
+  // Fallback: left half = right movement, right half = jump
+  if (x < W / 2) return 'right';
   return 'jump';
 }
 
@@ -5223,54 +5243,72 @@ function drawHelpOverlay() {
 // ── MOBILE TOUCH OVERLAY ──
 function drawTouchOverlay() {
   ctx.save();
-  ctx.globalAlpha = 0.15;
-  const thirdW = W / 3;
+  const btnR = 32; // button radius
+  const pad = 24;  // padding from screen edges
+  const bottomY = H - pad - btnR;
 
-  // Left zone — arrow left
-  ctx.fillStyle = touchLeft ? '#ffaa00' : '#ffffff';
-  ctx.globalAlpha = touchLeft ? 0.25 : 0.1;
-  ctx.beginPath();
-  const lx = thirdW / 2, ly = H * 0.75;
-  ctx.moveTo(lx - 22, ly); ctx.lineTo(lx + 12, ly - 18); ctx.lineTo(lx + 12, ly + 18);
-  ctx.fill();
+  // Helper: draw a circular button with icon
+  function drawBtn(cx, cy, active, iconFn) {
+    // Outer circle (border)
+    ctx.globalAlpha = active ? 0.45 : 0.2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, btnR, 0, Math.PI * 2);
+    ctx.fillStyle = active ? 'rgba(255,170,0,0.35)' : 'rgba(255,255,255,0.08)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = active ? '#ffaa00' : 'rgba(255,255,255,0.3)';
+    ctx.stroke();
+    // Icon inside
+    ctx.globalAlpha = active ? 0.8 : 0.4;
+    ctx.fillStyle = active ? '#ffcc44' : '#ffffff';
+    iconFn(cx, cy);
+  }
 
-  // Right zone — arrow right
-  ctx.fillStyle = touchRight ? '#ffaa00' : '#ffffff';
-  ctx.globalAlpha = touchRight ? 0.25 : 0.1;
-  ctx.beginPath();
-  const rx = thirdW * 1.5, ry = H * 0.75;
-  ctx.moveTo(rx + 22, ry); ctx.lineTo(rx - 12, ry - 18); ctx.lineTo(rx - 12, ry + 18);
-  ctx.fill();
+  // ── D-pad: bottom-left ──
+  const dpadCx = pad + btnR + 10;
+  const dpadCy = bottomY;
 
-  // Jump zone — up arrow
+  // Left arrow button
+  drawBtn(dpadCx - btnR - 12, dpadCy, touchLeft, (cx, cy) => {
+    ctx.beginPath();
+    ctx.moveTo(cx - 12, cy); ctx.lineTo(cx + 8, cy - 11); ctx.lineTo(cx + 8, cy + 11);
+    ctx.fill();
+  });
+
+  // Right arrow button
+  drawBtn(dpadCx + btnR + 12, dpadCy, touchRight, (cx, cy) => {
+    ctx.beginPath();
+    ctx.moveTo(cx + 12, cy); ctx.lineTo(cx - 8, cy - 11); ctx.lineTo(cx - 8, cy + 11);
+    ctx.fill();
+  });
+
+  // ── Jump button: bottom-right ──
   const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
-  ctx.fillStyle = hasActiveJump ? '#ffaa00' : '#ffffff';
-  ctx.globalAlpha = hasActiveJump ? 0.25 : 0.1;
-  ctx.beginPath();
-  const jx = W * 0.78, jy = H * 0.55;
-  ctx.moveTo(jx, jy - 24); ctx.lineTo(jx - 20, jy + 10); ctx.lineTo(jx + 20, jy + 10);
-  ctx.fill();
+  const jumpCx = W - pad - btnR - 10;
+  const jumpCy = bottomY - btnR - 16;
+  drawBtn(jumpCx, jumpCy, hasActiveJump, (cx, cy) => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 14); ctx.lineTo(cx - 13, cy + 8); ctx.lineTo(cx + 13, cy + 8);
+    ctx.fill();
+  });
 
-  // Labels
-  ctx.globalAlpha = 0.2;
+  // ── Crouch button: bottom-right, below jump ──
+  const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
+  const crouchCx = jumpCx;
+  const crouchCy = bottomY + 6;
+  drawBtn(crouchCx, crouchCy, hasActiveCrouch, (cx, cy) => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 14); ctx.lineTo(cx - 13, cy - 8); ctx.lineTo(cx + 13, cy - 8);
+    ctx.fill();
+  });
+
+  // ── Labels ──
+  ctx.globalAlpha = 0.3;
   ctx.fillStyle = '#ffffff';
-  ctx.font = `9px ${GAME_FONT}`;
+  ctx.font = `8px ${GAME_FONT}`;
   ctx.textAlign = 'center';
-  ctx.fillText('LEFT', thirdW / 2, H - 15);
-  ctx.fillText('RIGHT', thirdW * 1.5, H - 15);
-  ctx.fillText('JUMP', W * 0.78, H * 0.55 + 35);
-  ctx.fillText('DUCK', W - 40, H - 15);
-
-  // Divider lines (subtle)
-  ctx.globalAlpha = 0.06;
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(thirdW, H * 0.5); ctx.lineTo(thirdW, H);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(thirdW * 2, H * 0.5); ctx.lineTo(thirdW * 2, H);
-  ctx.stroke();
+  ctx.fillText('JUMP', jumpCx, jumpCy - btnR - 6);
+  ctx.fillText('DUCK', crouchCx, crouchCy + btnR + 12);
 
   ctx.restore();
 }
