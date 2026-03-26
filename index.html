@@ -1347,36 +1347,32 @@ const BTN_A_OFFSET_Y = 110; // from bottom
 const BTN_B_OFFSET_Y = 150; // from bottom
 
 function getTouchZone(x, y) {
-  // D-pad: centered at (DPAD_CX, H - DPAD_CY_OFFSET)
+  // D-pad: left/right/down movement, up = jump
   const dCx = DPAD_CX;
   const dCy = H - DPAD_CY_OFFSET;
   const dx = x - dCx;
   const dy = y - dCy;
 
-  // Check if touch is in D-pad area
   if (Math.abs(dx) < DPAD_HIT + 20 && Math.abs(dy) < DPAD_HIT + 20) {
-    // Left arm
-    if (dx < -10 && Math.abs(dy) < DPAD_HIT) return 'left';
-    // Right arm
-    if (dx > 10 && Math.abs(dy) < DPAD_HIT) return 'right';
-    // Down arm (crouch)
-    if (dy > 10 && Math.abs(dx) < DPAD_HIT) return 'crouch';
-    // Up arm (unused but detect)
-    if (dy < -10 && Math.abs(dx) < DPAD_HIT) return 'jump';
+    // Determine dominant axis
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx < 0 ? 'left' : 'right';
+    } else {
+      return dy > 0 ? 'crouch' : 'jump';
+    }
   }
 
-  // A button (right, lower) = JUMP
+  // A button = JUMP
   const aCx = W - BTN_A_OFFSET_X;
   const aCy = H - BTN_A_OFFSET_Y;
   if (Math.hypot(x - aCx, y - aCy) < BTN_R + 20) return 'jump';
 
-  // B button (left of A, slightly higher) = CROUCH/DUCK
+  // B button = DUCK
   const bCx = W - BTN_B_OFFSET_X;
   const bCy = H - BTN_B_OFFSET_Y;
   if (Math.hypot(x - bCx, y - bCy) < BTN_R + 20) return 'crouch';
 
-  // Fallback: left half = right movement, right half = jump
-  if (x < W / 2) return 'right';
+  // Fallback: anywhere = jump
   return 'jump';
 }
 
@@ -1708,22 +1704,16 @@ function update() {
   player.vy += GRAVITY;
   player.y += player.vy;
 
-  // Horizontal movement
-  // On mobile: player stays put, left/right nudge scroll speed instead
+  // Horizontal movement — identical behavior on mobile and desktop
   let moveX = 0;
-  if (isMobile) {
-    if (keys['ArrowLeft']) scrollOffset += PLAYER_SPEED * 0.6;   // left = world pulls ahead
-    if (keys['ArrowRight']) scrollOffset -= PLAYER_SPEED * 0.4;  // right = slow down slightly
-    player.facingRight = true; // always face forward on mobile
-  } else {
-    if (keys['ArrowLeft'] || keys['KeyA']) moveX = -PLAYER_SPEED;
-    if (keys['ArrowRight'] || keys['KeyD']) moveX = PLAYER_SPEED;
-    player.x += moveX;
-    player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
-    // Track facing direction
-    if (moveX > 0) player.facingRight = true;
-    else if (moveX < 0) player.facingRight = false;
-  }
+  if (keys['ArrowLeft'] || keys['KeyA']) moveX = -PLAYER_SPEED;
+  if (keys['ArrowRight'] || keys['KeyD']) moveX = PLAYER_SPEED;
+  player.x += moveX;
+  player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+
+  // Track facing direction
+  if (moveX > 0) player.facingRight = true;
+  else if (moveX < 0) player.facingRight = false;
 
   // Crouch — down arrow or S while grounded
   const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
@@ -5275,23 +5265,23 @@ function drawHelpOverlay() {
 // ── MOBILE TOUCH OVERLAY ──
 function drawTouchOverlay() {
   ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
+  const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
   const dCx = DPAD_CX;
   const dCy = H - DPAD_CY_OFFSET;
   const arm = DPAD_ARM;
   const w = DPAD_W;
-  const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
-  const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
-
-  // ── D-PAD (cross shape) ──
   const hw = w / 2;
 
-  // Dark background fill for the whole cross
+  // ── D-PAD (cross shape) ──
+  // Dark background
   ctx.globalAlpha = 0.5;
   ctx.fillStyle = '#111118';
-  ctx.fillRect(dCx - w / 2, dCy - arm - hw, w, arm * 2 + w);
+  ctx.fillRect(dCx - hw, dCy - arm - hw, w, arm * 2 + w);
   ctx.fillRect(dCx - arm - hw, dCy - hw, arm * 2 + w, w);
-
-  // Thick visible border
+  // Border
   ctx.globalAlpha = 0.6;
   ctx.strokeStyle = '#aaaaaa';
   ctx.lineWidth = 3;
@@ -5310,115 +5300,66 @@ function drawTouchOverlay() {
   ctx.lineTo(dCx - hw, dCy - hw);
   ctx.closePath();
   ctx.stroke();
-
-  // Bright highlight on pressed direction
+  // Highlight pressed directions
   if (touchLeft) {
-    ctx.globalAlpha = 0.6;
-    ctx.fillStyle = '#ffaa00';
+    ctx.globalAlpha = 0.6; ctx.fillStyle = '#ffaa00';
     ctx.fillRect(dCx - arm - hw, dCy - hw, arm, w);
   }
   if (touchRight) {
-    ctx.globalAlpha = 0.6;
-    ctx.fillStyle = '#ffaa00';
+    ctx.globalAlpha = 0.6; ctx.fillStyle = '#ffaa00';
     ctx.fillRect(dCx + hw, dCy - hw, arm, w);
   }
   if (hasActiveCrouch) {
-    ctx.globalAlpha = 0.6;
-    ctx.fillStyle = '#ffaa00';
+    ctx.globalAlpha = 0.6; ctx.fillStyle = '#ffaa00';
     ctx.fillRect(dCx - hw, dCy + hw, w, arm);
   }
-
-  // D-pad arrow icons — bold and visible
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const arrowSize = 14;
-  // Left
+  // Arrow icons
+  const as = 14;
   ctx.globalAlpha = touchLeft ? 1.0 : 0.6;
   ctx.fillStyle = touchLeft ? '#ffee66' : '#dddddd';
   ctx.beginPath();
-  ctx.moveTo(dCx - arm + 4, dCy);
-  ctx.lineTo(dCx - arm + 4 + arrowSize, dCy - arrowSize);
-  ctx.lineTo(dCx - arm + 4 + arrowSize, dCy + arrowSize);
-  ctx.fill();
-  // Right
+  ctx.moveTo(dCx - arm + 4, dCy); ctx.lineTo(dCx - arm + 4 + as, dCy - as); ctx.lineTo(dCx - arm + 4 + as, dCy + as); ctx.fill();
   ctx.globalAlpha = touchRight ? 1.0 : 0.6;
   ctx.fillStyle = touchRight ? '#ffee66' : '#dddddd';
   ctx.beginPath();
-  ctx.moveTo(dCx + arm - 4, dCy);
-  ctx.lineTo(dCx + arm - 4 - arrowSize, dCy - arrowSize);
-  ctx.lineTo(dCx + arm - 4 - arrowSize, dCy + arrowSize);
-  ctx.fill();
-  // Down
+  ctx.moveTo(dCx + arm - 4, dCy); ctx.lineTo(dCx + arm - 4 - as, dCy - as); ctx.lineTo(dCx + arm - 4 - as, dCy + as); ctx.fill();
   ctx.globalAlpha = hasActiveCrouch ? 1.0 : 0.6;
   ctx.fillStyle = hasActiveCrouch ? '#ffee66' : '#dddddd';
   ctx.beginPath();
-  ctx.moveTo(dCx, dCy + arm - 4);
-  ctx.lineTo(dCx - arrowSize, dCy + arm - 4 - arrowSize);
-  ctx.lineTo(dCx + arrowSize, dCy + arm - 4 - arrowSize);
-  ctx.fill();
-  // Up (dimmer — not a primary control)
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = '#999999';
+  ctx.moveTo(dCx, dCy + arm - 4); ctx.lineTo(dCx - as, dCy + arm - 4 - as); ctx.lineTo(dCx + as, dCy + arm - 4 - as); ctx.fill();
+  ctx.globalAlpha = hasActiveJump ? 1.0 : 0.35;
+  ctx.fillStyle = hasActiveJump ? '#ffee66' : '#999999';
   ctx.beginPath();
-  ctx.moveTo(dCx, dCy - arm + 4);
-  ctx.lineTo(dCx - arrowSize, dCy - arm + 4 + arrowSize);
-  ctx.lineTo(dCx + arrowSize, dCy - arm + 4 + arrowSize);
-  ctx.fill();
+  ctx.moveTo(dCx, dCy - arm + 4); ctx.lineTo(dCx - as, dCy - arm + 4 + as); ctx.lineTo(dCx + as, dCy - arm + 4 + as); ctx.fill();
 
-  // ── A BUTTON (right, red) — JUMP ──
+  // ── A BUTTON (red) — JUMP ──
   const aCx = W - BTN_A_OFFSET_X;
   const aCy = H - BTN_A_OFFSET_Y;
-  // Shadow
   ctx.globalAlpha = 0.4;
-  ctx.beginPath();
-  ctx.arc(aCx, aCy + 4, BTN_R + 3, 0, Math.PI * 2);
-  ctx.fillStyle = '#000000';
-  ctx.fill();
-  // Button face
+  ctx.beginPath(); ctx.arc(aCx, aCy + 4, BTN_R + 3, 0, Math.PI * 2); ctx.fillStyle = '#000000'; ctx.fill();
   ctx.globalAlpha = hasActiveJump ? 0.85 : 0.55;
-  ctx.beginPath();
-  ctx.arc(aCx, aCy, BTN_R, 0, Math.PI * 2);
-  ctx.fillStyle = hasActiveJump ? '#ee3333' : '#aa1111';
-  ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = hasActiveJump ? '#ff6666' : '#cc4444';
-  ctx.stroke();
-  // "A" label
+  ctx.beginPath(); ctx.arc(aCx, aCy, BTN_R, 0, Math.PI * 2);
+  ctx.fillStyle = hasActiveJump ? '#ee3333' : '#aa1111'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = hasActiveJump ? '#ff6666' : '#cc4444'; ctx.stroke();
   ctx.globalAlpha = hasActiveJump ? 1.0 : 0.8;
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `bold 24px ${GAME_FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff'; ctx.font = `bold 24px ${GAME_FONT}`;
   ctx.fillText('A', aCx, aCy + 1);
 
-  // ── B BUTTON (left of A, blue) — DUCK ──
+  // ── B BUTTON (blue) — DUCK ──
   const bCx = W - BTN_B_OFFSET_X;
   const bCy = H - BTN_B_OFFSET_Y;
-  // Shadow
   ctx.globalAlpha = 0.4;
-  ctx.beginPath();
-  ctx.arc(bCx, bCy + 4, BTN_R + 3, 0, Math.PI * 2);
-  ctx.fillStyle = '#000000';
-  ctx.fill();
-  // Button face
+  ctx.beginPath(); ctx.arc(bCx, bCy + 4, BTN_R + 3, 0, Math.PI * 2); ctx.fillStyle = '#000000'; ctx.fill();
   ctx.globalAlpha = hasActiveCrouch ? 0.85 : 0.55;
-  ctx.beginPath();
-  ctx.arc(bCx, bCy, BTN_R, 0, Math.PI * 2);
-  ctx.fillStyle = hasActiveCrouch ? '#3355dd' : '#1133aa';
-  ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = hasActiveCrouch ? '#5577ff' : '#4466cc';
-  ctx.stroke();
-  // "B" label
+  ctx.beginPath(); ctx.arc(bCx, bCy, BTN_R, 0, Math.PI * 2);
+  ctx.fillStyle = hasActiveCrouch ? '#3355dd' : '#1133aa'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = hasActiveCrouch ? '#5577ff' : '#4466cc'; ctx.stroke();
   ctx.globalAlpha = hasActiveCrouch ? 1.0 : 0.8;
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `bold 24px ${GAME_FONT}`;
+  ctx.fillStyle = '#ffffff'; ctx.font = `bold 24px ${GAME_FONT}`;
   ctx.fillText('B', bCx, bCy + 1);
 
-  // Function labels below buttons
-  ctx.globalAlpha = 0.5;
-  ctx.font = `9px ${GAME_FONT}`;
-  ctx.fillStyle = '#ffffff';
+  // Labels
+  ctx.globalAlpha = 0.5; ctx.font = `9px ${GAME_FONT}`; ctx.fillStyle = '#ffffff';
   ctx.fillText('JUMP', aCx, aCy + BTN_R + 16);
   ctx.fillText('DUCK', bCx, bCy + BTN_R + 16);
 
