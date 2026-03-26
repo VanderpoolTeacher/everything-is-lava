@@ -1333,18 +1333,18 @@ let touchCrouch = false;
 
 // ── NES-STYLE CONTROLLER LAYOUT ──
 // D-pad center position (bottom-left area)
-const DPAD_CX = 110;
-const DPAD_CY_OFFSET = 90; // from bottom
-const DPAD_ARM = 38;  // arm length from center
-const DPAD_W = 34;    // arm width
-const DPAD_HIT = 55;  // hit radius per direction
+const DPAD_CX = 130;
+const DPAD_CY_OFFSET = 110; // from bottom
+const DPAD_ARM = 52;  // arm length from center
+const DPAD_W = 46;    // arm width
+const DPAD_HIT = 70;  // hit radius per direction
 
 // A/B button positions (bottom-right area)
-const BTN_R = 32;     // button radius
-const BTN_A_OFFSET_X = 100; // from right edge
-const BTN_B_OFFSET_X = 180; // from right edge
-const BTN_A_OFFSET_Y = 100; // from bottom
-const BTN_B_OFFSET_Y = 130; // from bottom
+const BTN_R = 46;     // button radius
+const BTN_A_OFFSET_X = 110; // from right edge
+const BTN_B_OFFSET_X = 210; // from right edge
+const BTN_A_OFFSET_Y = 110; // from bottom
+const BTN_B_OFFSET_Y = 150; // from bottom
 
 function getTouchZone(x, y) {
   // D-pad: centered at (DPAD_CX, H - DPAD_CY_OFFSET)
@@ -5388,7 +5388,7 @@ function drawTouchOverlay() {
   // "A" label
   ctx.globalAlpha = hasActiveJump ? 0.9 : 0.5;
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold 18px ${GAME_FONT}`;
+  ctx.font = `bold 24px ${GAME_FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('A', aCx, aCy + 1);
@@ -5414,7 +5414,7 @@ function drawTouchOverlay() {
   // "B" label
   ctx.globalAlpha = hasActiveCrouch ? 0.9 : 0.5;
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold 18px ${GAME_FONT}`;
+  ctx.font = `bold 24px ${GAME_FONT}`;
   ctx.fillText('B', bCx, bCy + 1);
 
   // Function labels below buttons
