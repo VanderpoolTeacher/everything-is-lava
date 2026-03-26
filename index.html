@@ -1331,48 +1331,36 @@ let touchLeft = false;
 let touchRight = false;
 let touchCrouch = false;
 
-// ── NES-STYLE CONTROLLER LAYOUT ──
-// D-pad center position (bottom-left area)
-const DPAD_CX = 130;
-const DPAD_CY_OFFSET = 110; // from bottom
-const DPAD_ARM = 52;  // arm length from center
-const DPAD_W = 46;    // arm width
-const DPAD_HIT = 70;  // hit radius per direction
-
-// A/B button positions (bottom-right area)
-const BTN_R = 46;     // button radius
-const BTN_A_OFFSET_X = 110; // from right edge
-const BTN_B_OFFSET_X = 210; // from right edge
-const BTN_A_OFFSET_Y = 110; // from bottom
-const BTN_B_OFFSET_Y = 150; // from bottom
+// ── MOBILE BUTTON LAYOUT ──
+// Four big buttons: LEFT and RIGHT on left side, A (jump) and B (duck) on right
+const BTN_R = 55;     // button radius — big for easy thumbs
 
 function getTouchZone(x, y) {
-  // D-pad: left/right/down movement, up = jump
-  const dCx = DPAD_CX;
-  const dCy = H - DPAD_CY_OFFSET;
-  const dx = x - dCx;
-  const dy = y - dCy;
+  const pad = 30;
+  const spacing = BTN_R * 2 + 20;
 
-  if (Math.abs(dx) < DPAD_HIT + 20 && Math.abs(dy) < DPAD_HIT + 20) {
-    // Determine dominant axis
-    if (Math.abs(dx) > Math.abs(dy)) {
-      return dx < 0 ? 'left' : 'right';
-    } else {
-      return dy > 0 ? 'crouch' : 'jump';
-    }
-  }
+  // LEFT button — bottom-left
+  const lCx = pad + BTN_R;
+  const lCy = H - pad - BTN_R;
+  if (Math.hypot(x - lCx, y - lCy) < BTN_R + 20) return 'left';
 
-  // A button = JUMP
-  const aCx = W - BTN_A_OFFSET_X;
-  const aCy = H - BTN_A_OFFSET_Y;
+  // RIGHT button — next to left
+  const rCx = lCx + spacing;
+  const rCy = lCy;
+  if (Math.hypot(x - rCx, y - rCy) < BTN_R + 20) return 'right';
+
+  // A button (jump) — bottom-right
+  const aCx = W - pad - BTN_R;
+  const aCy = H - pad - BTN_R;
   if (Math.hypot(x - aCx, y - aCy) < BTN_R + 20) return 'jump';
 
-  // B button = DUCK
-  const bCx = W - BTN_B_OFFSET_X;
-  const bCy = H - BTN_B_OFFSET_Y;
+  // B button (duck) — left of A
+  const bCx = aCx - spacing;
+  const bCy = aCy;
   if (Math.hypot(x - bCx, y - bCy) < BTN_R + 20) return 'crouch';
 
-  // Fallback: anywhere = jump
+  // Fallback: left half = right movement, right half = jump
+  if (x < W / 2) return 'right';
   return 'jump';
 }
 
@@ -5269,99 +5257,47 @@ function drawTouchOverlay() {
   ctx.textBaseline = 'middle';
   const hasActiveJump = Object.values(activeTouches).some(t => t.zone === 'jump');
   const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
-  const dCx = DPAD_CX;
-  const dCy = H - DPAD_CY_OFFSET;
-  const arm = DPAD_ARM;
-  const w = DPAD_W;
-  const hw = w / 2;
+  const pad = 30;
+  const spacing = BTN_R * 2 + 20;
 
-  // ── D-PAD (cross shape) ──
-  // Dark background
-  ctx.globalAlpha = 0.5;
-  ctx.fillStyle = '#111118';
-  ctx.fillRect(dCx - hw, dCy - arm - hw, w, arm * 2 + w);
-  ctx.fillRect(dCx - arm - hw, dCy - hw, arm * 2 + w, w);
-  // Border
-  ctx.globalAlpha = 0.6;
-  ctx.strokeStyle = '#aaaaaa';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(dCx - hw, dCy - arm - hw);
-  ctx.lineTo(dCx + hw, dCy - arm - hw);
-  ctx.lineTo(dCx + hw, dCy - hw);
-  ctx.lineTo(dCx + arm + hw, dCy - hw);
-  ctx.lineTo(dCx + arm + hw, dCy + hw);
-  ctx.lineTo(dCx + hw, dCy + hw);
-  ctx.lineTo(dCx + hw, dCy + arm + hw);
-  ctx.lineTo(dCx - hw, dCy + arm + hw);
-  ctx.lineTo(dCx - hw, dCy + hw);
-  ctx.lineTo(dCx - arm - hw, dCy + hw);
-  ctx.lineTo(dCx - arm - hw, dCy - hw);
-  ctx.lineTo(dCx - hw, dCy - hw);
-  ctx.closePath();
-  ctx.stroke();
-  // Highlight pressed directions
-  if (touchLeft) {
-    ctx.globalAlpha = 0.6; ctx.fillStyle = '#ffaa00';
-    ctx.fillRect(dCx - arm - hw, dCy - hw, arm, w);
+  // Helper: draw a big round button
+  function btn(cx, cy, active, label, baseColor, activeColor, borderColor, activeBorder) {
+    // Shadow
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath(); ctx.arc(cx, cy + 4, BTN_R + 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000'; ctx.fill();
+    // Face
+    ctx.globalAlpha = active ? 0.85 : 0.5;
+    ctx.beginPath(); ctx.arc(cx, cy, BTN_R, 0, Math.PI * 2);
+    ctx.fillStyle = active ? activeColor : baseColor; ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = active ? activeBorder : borderColor; ctx.stroke();
+    // Label
+    ctx.globalAlpha = active ? 1.0 : 0.7;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 22px ${GAME_FONT}`;
+    ctx.fillText(label, cx, cy + 1);
   }
-  if (touchRight) {
-    ctx.globalAlpha = 0.6; ctx.fillStyle = '#ffaa00';
-    ctx.fillRect(dCx + hw, dCy - hw, arm, w);
-  }
-  if (hasActiveCrouch) {
-    ctx.globalAlpha = 0.6; ctx.fillStyle = '#ffaa00';
-    ctx.fillRect(dCx - hw, dCy + hw, w, arm);
-  }
-  // Arrow icons
-  const as = 14;
-  ctx.globalAlpha = touchLeft ? 1.0 : 0.6;
-  ctx.fillStyle = touchLeft ? '#ffee66' : '#dddddd';
-  ctx.beginPath();
-  ctx.moveTo(dCx - arm + 4, dCy); ctx.lineTo(dCx - arm + 4 + as, dCy - as); ctx.lineTo(dCx - arm + 4 + as, dCy + as); ctx.fill();
-  ctx.globalAlpha = touchRight ? 1.0 : 0.6;
-  ctx.fillStyle = touchRight ? '#ffee66' : '#dddddd';
-  ctx.beginPath();
-  ctx.moveTo(dCx + arm - 4, dCy); ctx.lineTo(dCx + arm - 4 - as, dCy - as); ctx.lineTo(dCx + arm - 4 - as, dCy + as); ctx.fill();
-  ctx.globalAlpha = hasActiveCrouch ? 1.0 : 0.6;
-  ctx.fillStyle = hasActiveCrouch ? '#ffee66' : '#dddddd';
-  ctx.beginPath();
-  ctx.moveTo(dCx, dCy + arm - 4); ctx.lineTo(dCx - as, dCy + arm - 4 - as); ctx.lineTo(dCx + as, dCy + arm - 4 - as); ctx.fill();
-  ctx.globalAlpha = hasActiveJump ? 1.0 : 0.35;
-  ctx.fillStyle = hasActiveJump ? '#ffee66' : '#999999';
-  ctx.beginPath();
-  ctx.moveTo(dCx, dCy - arm + 4); ctx.lineTo(dCx - as, dCy - arm + 4 + as); ctx.lineTo(dCx + as, dCy - arm + 4 + as); ctx.fill();
 
-  // ── A BUTTON (red) — JUMP ──
-  const aCx = W - BTN_A_OFFSET_X;
-  const aCy = H - BTN_A_OFFSET_Y;
-  ctx.globalAlpha = 0.4;
-  ctx.beginPath(); ctx.arc(aCx, aCy + 4, BTN_R + 3, 0, Math.PI * 2); ctx.fillStyle = '#000000'; ctx.fill();
-  ctx.globalAlpha = hasActiveJump ? 0.85 : 0.55;
-  ctx.beginPath(); ctx.arc(aCx, aCy, BTN_R, 0, Math.PI * 2);
-  ctx.fillStyle = hasActiveJump ? '#ee3333' : '#aa1111'; ctx.fill();
-  ctx.lineWidth = 3; ctx.strokeStyle = hasActiveJump ? '#ff6666' : '#cc4444'; ctx.stroke();
-  ctx.globalAlpha = hasActiveJump ? 1.0 : 0.8;
-  ctx.fillStyle = '#ffffff'; ctx.font = `bold 24px ${GAME_FONT}`;
-  ctx.fillText('A', aCx, aCy + 1);
+  // ── LEFT (bottom-left) ──
+  const lCx = pad + BTN_R;
+  const lCy = H - pad - BTN_R;
+  btn(lCx, lCy, touchLeft, '\u25C0', '#444455', '#886600', '#777788', '#ffaa00');
 
-  // ── B BUTTON (blue) — DUCK ──
-  const bCx = W - BTN_B_OFFSET_X;
-  const bCy = H - BTN_B_OFFSET_Y;
-  ctx.globalAlpha = 0.4;
-  ctx.beginPath(); ctx.arc(bCx, bCy + 4, BTN_R + 3, 0, Math.PI * 2); ctx.fillStyle = '#000000'; ctx.fill();
-  ctx.globalAlpha = hasActiveCrouch ? 0.85 : 0.55;
-  ctx.beginPath(); ctx.arc(bCx, bCy, BTN_R, 0, Math.PI * 2);
-  ctx.fillStyle = hasActiveCrouch ? '#3355dd' : '#1133aa'; ctx.fill();
-  ctx.lineWidth = 3; ctx.strokeStyle = hasActiveCrouch ? '#5577ff' : '#4466cc'; ctx.stroke();
-  ctx.globalAlpha = hasActiveCrouch ? 1.0 : 0.8;
-  ctx.fillStyle = '#ffffff'; ctx.font = `bold 24px ${GAME_FONT}`;
-  ctx.fillText('B', bCx, bCy + 1);
+  // ── RIGHT (next to left) ──
+  const rCx = lCx + spacing;
+  const rCy = lCy;
+  btn(rCx, rCy, touchRight, '\u25B6', '#444455', '#886600', '#777788', '#ffaa00');
 
-  // Labels
-  ctx.globalAlpha = 0.5; ctx.font = `9px ${GAME_FONT}`; ctx.fillStyle = '#ffffff';
-  ctx.fillText('JUMP', aCx, aCy + BTN_R + 16);
-  ctx.fillText('DUCK', bCx, bCy + BTN_R + 16);
+  // ── A / JUMP (bottom-right) ──
+  const aCx = W - pad - BTN_R;
+  const aCy = H - pad - BTN_R;
+  btn(aCx, aCy, hasActiveJump, 'A', '#aa1111', '#ee3333', '#cc4444', '#ff6666');
+
+  // ── B / DUCK (left of A) ──
+  const bCx = aCx - spacing;
+  const bCy = aCy;
+  btn(bCx, bCy, hasActiveCrouch, 'B', '#1133aa', '#3355dd', '#4466cc', '#5577ff');
 
   ctx.textBaseline = 'alphabetic';
   ctx.restore();
