@@ -5283,19 +5283,19 @@ function drawTouchOverlay() {
   const hasActiveCrouch = Object.values(activeTouches).some(t => t.zone === 'crouch');
 
   // ── D-PAD (cross shape) ──
-  // Center square
-  ctx.globalAlpha = 0.18;
-  ctx.fillStyle = '#222222';
-  ctx.fillRect(dCx - w / 2, dCy - arm - w / 2, w, arm * 2 + w); // vertical bar
-  ctx.fillRect(dCx - arm - w / 2, dCy - w / 2, arm * 2 + w, w); // horizontal bar
-
-  // D-pad border
-  ctx.globalAlpha = 0.3;
-  ctx.strokeStyle = '#888888';
-  ctx.lineWidth = 2;
-  // Draw cross outline
-  ctx.beginPath();
   const hw = w / 2;
+
+  // Dark background fill for the whole cross
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = '#111118';
+  ctx.fillRect(dCx - w / 2, dCy - arm - hw, w, arm * 2 + w);
+  ctx.fillRect(dCx - arm - hw, dCy - hw, arm * 2 + w, w);
+
+  // Thick visible border
+  ctx.globalAlpha = 0.6;
+  ctx.strokeStyle = '#aaaaaa';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
   ctx.moveTo(dCx - hw, dCy - arm - hw);
   ctx.lineTo(dCx + hw, dCy - arm - hw);
   ctx.lineTo(dCx + hw, dCy - hw);
@@ -5311,82 +5311,80 @@ function drawTouchOverlay() {
   ctx.closePath();
   ctx.stroke();
 
-  // Highlight pressed directions
-  // Left
+  // Bright highlight on pressed direction
   if (touchLeft) {
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.6;
     ctx.fillStyle = '#ffaa00';
     ctx.fillRect(dCx - arm - hw, dCy - hw, arm, w);
   }
-  // Right
   if (touchRight) {
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.6;
     ctx.fillStyle = '#ffaa00';
     ctx.fillRect(dCx + hw, dCy - hw, arm, w);
   }
-  // Down (crouch via d-pad)
   if (hasActiveCrouch) {
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.6;
     ctx.fillStyle = '#ffaa00';
     ctx.fillRect(dCx - hw, dCy + hw, w, arm);
   }
 
-  // D-pad arrows
+  // D-pad arrow icons — bold and visible
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  // Left arrow
-  ctx.globalAlpha = touchLeft ? 0.7 : 0.35;
-  ctx.fillStyle = touchLeft ? '#ffcc44' : '#cccccc';
+  const arrowSize = 14;
+  // Left
+  ctx.globalAlpha = touchLeft ? 1.0 : 0.6;
+  ctx.fillStyle = touchLeft ? '#ffee66' : '#dddddd';
   ctx.beginPath();
-  ctx.moveTo(dCx - arm + 2, dCy);
-  ctx.lineTo(dCx - arm + 18, dCy - 9);
-  ctx.lineTo(dCx - arm + 18, dCy + 9);
+  ctx.moveTo(dCx - arm + 4, dCy);
+  ctx.lineTo(dCx - arm + 4 + arrowSize, dCy - arrowSize);
+  ctx.lineTo(dCx - arm + 4 + arrowSize, dCy + arrowSize);
   ctx.fill();
-  // Right arrow
-  ctx.globalAlpha = touchRight ? 0.7 : 0.35;
-  ctx.fillStyle = touchRight ? '#ffcc44' : '#cccccc';
+  // Right
+  ctx.globalAlpha = touchRight ? 1.0 : 0.6;
+  ctx.fillStyle = touchRight ? '#ffee66' : '#dddddd';
   ctx.beginPath();
-  ctx.moveTo(dCx + arm - 2, dCy);
-  ctx.lineTo(dCx + arm - 18, dCy - 9);
-  ctx.lineTo(dCx + arm - 18, dCy + 9);
+  ctx.moveTo(dCx + arm - 4, dCy);
+  ctx.lineTo(dCx + arm - 4 - arrowSize, dCy - arrowSize);
+  ctx.lineTo(dCx + arm - 4 - arrowSize, dCy + arrowSize);
   ctx.fill();
-  // Down arrow
-  ctx.globalAlpha = hasActiveCrouch ? 0.7 : 0.35;
-  ctx.fillStyle = hasActiveCrouch ? '#ffcc44' : '#cccccc';
+  // Down
+  ctx.globalAlpha = hasActiveCrouch ? 1.0 : 0.6;
+  ctx.fillStyle = hasActiveCrouch ? '#ffee66' : '#dddddd';
   ctx.beginPath();
-  ctx.moveTo(dCx, dCy + arm - 2);
-  ctx.lineTo(dCx - 9, dCy + arm - 18);
-  ctx.lineTo(dCx + 9, dCy + arm - 18);
+  ctx.moveTo(dCx, dCy + arm - 4);
+  ctx.lineTo(dCx - arrowSize, dCy + arm - 4 - arrowSize);
+  ctx.lineTo(dCx + arrowSize, dCy + arm - 4 - arrowSize);
   ctx.fill();
-  // Up arrow
-  ctx.globalAlpha = 0.2;
-  ctx.fillStyle = '#cccccc';
+  // Up (dimmer — not a primary control)
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = '#999999';
   ctx.beginPath();
-  ctx.moveTo(dCx, dCy - arm + 2);
-  ctx.lineTo(dCx - 9, dCy - arm + 18);
-  ctx.lineTo(dCx + 9, dCy - arm + 18);
+  ctx.moveTo(dCx, dCy - arm + 4);
+  ctx.lineTo(dCx - arrowSize, dCy - arm + 4 + arrowSize);
+  ctx.lineTo(dCx + arrowSize, dCy - arm + 4 + arrowSize);
   ctx.fill();
 
   // ── A BUTTON (right, red) — JUMP ──
   const aCx = W - BTN_A_OFFSET_X;
   const aCy = H - BTN_A_OFFSET_Y;
   // Shadow
-  ctx.globalAlpha = 0.15;
+  ctx.globalAlpha = 0.4;
   ctx.beginPath();
-  ctx.arc(aCx, aCy + 3, BTN_R + 2, 0, Math.PI * 2);
+  ctx.arc(aCx, aCy + 4, BTN_R + 3, 0, Math.PI * 2);
   ctx.fillStyle = '#000000';
   ctx.fill();
   // Button face
-  ctx.globalAlpha = hasActiveJump ? 0.55 : 0.25;
+  ctx.globalAlpha = hasActiveJump ? 0.85 : 0.55;
   ctx.beginPath();
   ctx.arc(aCx, aCy, BTN_R, 0, Math.PI * 2);
-  ctx.fillStyle = hasActiveJump ? '#cc2222' : '#991111';
+  ctx.fillStyle = hasActiveJump ? '#ee3333' : '#aa1111';
   ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = hasActiveJump ? '#ff4444' : 'rgba(255,100,100,0.4)';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = hasActiveJump ? '#ff6666' : '#cc4444';
   ctx.stroke();
   // "A" label
-  ctx.globalAlpha = hasActiveJump ? 0.9 : 0.5;
+  ctx.globalAlpha = hasActiveJump ? 1.0 : 0.8;
   ctx.fillStyle = '#ffffff';
   ctx.font = `bold 24px ${GAME_FONT}`;
   ctx.textAlign = 'center';
@@ -5397,32 +5395,32 @@ function drawTouchOverlay() {
   const bCx = W - BTN_B_OFFSET_X;
   const bCy = H - BTN_B_OFFSET_Y;
   // Shadow
-  ctx.globalAlpha = 0.15;
+  ctx.globalAlpha = 0.4;
   ctx.beginPath();
-  ctx.arc(bCx, bCy + 3, BTN_R + 2, 0, Math.PI * 2);
+  ctx.arc(bCx, bCy + 4, BTN_R + 3, 0, Math.PI * 2);
   ctx.fillStyle = '#000000';
   ctx.fill();
   // Button face
-  ctx.globalAlpha = hasActiveCrouch ? 0.55 : 0.25;
+  ctx.globalAlpha = hasActiveCrouch ? 0.85 : 0.55;
   ctx.beginPath();
   ctx.arc(bCx, bCy, BTN_R, 0, Math.PI * 2);
-  ctx.fillStyle = hasActiveCrouch ? '#2244cc' : '#112288';
+  ctx.fillStyle = hasActiveCrouch ? '#3355dd' : '#1133aa';
   ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = hasActiveCrouch ? '#4466ff' : 'rgba(100,130,255,0.4)';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = hasActiveCrouch ? '#5577ff' : '#4466cc';
   ctx.stroke();
   // "B" label
-  ctx.globalAlpha = hasActiveCrouch ? 0.9 : 0.5;
+  ctx.globalAlpha = hasActiveCrouch ? 1.0 : 0.8;
   ctx.fillStyle = '#ffffff';
   ctx.font = `bold 24px ${GAME_FONT}`;
   ctx.fillText('B', bCx, bCy + 1);
 
   // Function labels below buttons
-  ctx.globalAlpha = 0.3;
-  ctx.font = `8px ${GAME_FONT}`;
+  ctx.globalAlpha = 0.5;
+  ctx.font = `9px ${GAME_FONT}`;
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('JUMP', aCx, aCy + BTN_R + 14);
-  ctx.fillText('DUCK', bCx, bCy + BTN_R + 14);
+  ctx.fillText('JUMP', aCx, aCy + BTN_R + 16);
+  ctx.fillText('DUCK', bCx, bCy + BTN_R + 16);
 
   ctx.textBaseline = 'alphabetic';
   ctx.restore();
