@@ -1690,15 +1690,21 @@ function update() {
   player.y += player.vy;
 
   // Horizontal movement
+  // On mobile: player stays put, left/right nudge scroll speed instead
   let moveX = 0;
-  if (keys['ArrowLeft'] || keys['KeyA']) moveX = -PLAYER_SPEED;
-  if (keys['ArrowRight'] || keys['KeyD']) moveX = PLAYER_SPEED;
-  player.x += moveX;
-  player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
-
-  // Track facing direction
-  if (moveX > 0) player.facingRight = true;
-  else if (moveX < 0) player.facingRight = false;
+  if (isMobile) {
+    if (keys['ArrowLeft']) scrollOffset += PLAYER_SPEED * 0.6;   // left = world pulls ahead
+    if (keys['ArrowRight']) scrollOffset -= PLAYER_SPEED * 0.4;  // right = slow down slightly
+    player.facingRight = true; // always face forward on mobile
+  } else {
+    if (keys['ArrowLeft'] || keys['KeyA']) moveX = -PLAYER_SPEED;
+    if (keys['ArrowRight'] || keys['KeyD']) moveX = PLAYER_SPEED;
+    player.x += moveX;
+    player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+    // Track facing direction
+    if (moveX > 0) player.facingRight = true;
+    else if (moveX < 0) player.facingRight = false;
+  }
 
   // Crouch — down arrow or S while grounded
   const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
@@ -1713,7 +1719,8 @@ function update() {
   }
 
   // Idle detection — drop lava on player if they don't move for ~1 second
-  const isMoving = moveX !== 0 || !player.grounded || player.kicking;
+  const mobileActive = isMobile && (touchLeft || touchRight || Object.keys(activeTouches).length > 0);
+  const isMoving = moveX !== 0 || mobileActive || !player.grounded || player.kicking;
   if (isMoving) {
     player.idleTimer = 0;
   } else {
@@ -4398,7 +4405,7 @@ function drawMenu() {
     ctx.fillStyle = '#667788';
     ctx.font = `10px ${GAME_FONT}`;
     if (isMobile) {
-      ctx.fillText('Left = move left  ·  Center = right  ·  Right = jump', W / 2, H - 25);
+      ctx.fillText('Fast/Slow = speed  ·  Jump  ·  Duck  ·  Dodge the lava!', W / 2, H - 25);
     } else {
       ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
     }
@@ -5275,18 +5282,32 @@ function drawTouchOverlay() {
   const dpadCx = pad + btnR + 10;
   const dpadCy = bottomY;
 
-  // Left arrow button
+  // Fast button (double chevron >>)
   drawBtn(dpadCx - btnR - 14, dpadCy, touchLeft, (cx, cy) => {
-    ctx.beginPath();
-    ctx.moveTo(cx - 14, cy); ctx.lineTo(cx + 8, cy - 12); ctx.lineTo(cx + 8, cy + 12);
-    ctx.fill();
+    ctx.strokeStyle = touchLeft ? '#ffcc44' : '#ffffff';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 2; i++) {
+      const ox = -6 + i * 13;
+      ctx.beginPath();
+      ctx.moveTo(cx + ox - 4, cy - 10);
+      ctx.lineTo(cx + ox + 7, cy);
+      ctx.lineTo(cx + ox - 4, cy + 10);
+      ctx.stroke();
+    }
   }, btnR);
 
-  // Right arrow button
+  // Slow button (double chevron <<)
   drawBtn(dpadCx + btnR + 14, dpadCy, touchRight, (cx, cy) => {
-    ctx.beginPath();
-    ctx.moveTo(cx + 14, cy); ctx.lineTo(cx - 8, cy - 12); ctx.lineTo(cx - 8, cy + 12);
-    ctx.fill();
+    ctx.strokeStyle = touchRight ? '#ffcc44' : '#ffffff';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 2; i++) {
+      const ox = 6 - i * 13;
+      ctx.beginPath();
+      ctx.moveTo(cx + ox + 4, cy - 10);
+      ctx.lineTo(cx + ox - 7, cy);
+      ctx.lineTo(cx + ox + 4, cy + 10);
+      ctx.stroke();
+    }
   }, btnR);
 
   // ── JUMP button: bottom-right, large ──
@@ -5314,8 +5335,8 @@ function drawTouchOverlay() {
   ctx.fillStyle = '#ffffff';
   ctx.font = `8px ${GAME_FONT}`;
   ctx.textAlign = 'center';
-  ctx.fillText('LEFT', dpadCx - btnR - 14, dpadCy - btnR - 8);
-  ctx.fillText('RIGHT', dpadCx + btnR + 14, dpadCy - btnR - 8);
+  ctx.fillText('FAST', dpadCx - btnR - 14, dpadCy - btnR - 8);
+  ctx.fillText('SLOW', dpadCx + btnR + 14, dpadCy - btnR - 8);
   ctx.fillText('JUMP', jumpCx, jumpCy - btnR - 8);
   ctx.fillText('DUCK', crouchCx, crouchCy + btnR + 14);
 
