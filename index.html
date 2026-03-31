@@ -5405,8 +5405,30 @@ function draw() {
   drawPortraitWarning();
 }
 
-// ── GAME LOOP ──
-function gameLoop() {
+// ── GAME LOOP (fixed 60fps timestep) ──
+const FRAME_TIME = 1000 / 60; // 16.667ms per game tick
+let lastTime = 0;
+let accumulator = 0;
+
+function gameLoop(timestamp) {
+  if (lastTime === 0) lastTime = timestamp;
+  const elapsed = timestamp - lastTime;
+  lastTime = timestamp;
+  // Clamp to prevent spiral of death after tab switch or lag spike
+  accumulator += Math.min(elapsed, 200);
+
+  // Run fixed-step updates (may run 0, 1, or 2 ticks per frame)
+  while (accumulator >= FRAME_TIME) {
+    accumulator -= FRAME_TIME;
+    gameTick();
+  }
+
+  // Draw once per display frame
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+function gameTick() {
   frameCount++;
   if (gameState === 'dead' || gameState === 'gameover' || gameState === 'victory') deathTimer++;
   // Reset dojo key buffer on timeout
@@ -5447,13 +5469,11 @@ function gameLoop() {
   } else {
     update();
   }
-  draw();
-  requestAnimationFrame(gameLoop);
 }
 
 generateBuildings();
 generateStreetLamps();
-gameLoop();
+requestAnimationFrame(gameLoop);
 
 </script>
 </body>
