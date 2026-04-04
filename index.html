@@ -53,6 +53,24 @@ const MAX_PARTICLES = 150;
 const GRAVITY = 0.55;
 const JUMP_FORCE = -11.5;
 const GROUND_Y = H - 60; // street level
+
+function getGroundY(worldX) {
+  if (level !== 4) return GROUND_Y;
+  // Level 4 (2-1): ground slopes upward the entire time.
+  // The slope is relative to the current screen so it looks consistent
+  // throughout the level — the camera "climbs" with the player.
+  const progress = Math.min(1, levelTimer / levelDuration); // 0→1 over the level
+  const slope = 0.22 + progress * 0.10; // rise/run ratio (~12°→18°, steepens over time)
+
+  // screenX: position on screen (0 = left edge, W = right edge)
+  const screenX = worldX - scrollOffset;
+  // Player is at ~150px on screen. Ground at player stays at GROUND_Y.
+  // Ground to the right of the player is higher (lower Y), left is lower (higher Y).
+  const playerScreenX = 150;
+  const rise = (screenX - playerScreenX) * slope;
+  return GROUND_Y - rise;
+}
+
 const PLAYER_SPEED = 4.5;
 const RUN_SPEED = 2.5; // world scroll speed
 
@@ -93,6 +111,31 @@ const volcanoImg = new Image();
 volcanoImg.src = 'assets/volcano.png';
 let volcanoReady = false;
 volcanoImg.onload = function() { volcanoReady = true; };
+
+const volcanoGroundImg = new Image();
+volcanoGroundImg.src = 'assets/volcano-ground.png';
+let volcanoGroundReady = false;
+volcanoGroundImg.onload = function() { volcanoGroundReady = true; };
+
+const level2BgImg = new Image();
+level2BgImg.src = 'assets/level-2-bg.png';
+let level2BgReady = false;
+level2BgImg.onload = function() { level2BgReady = true; };
+
+const treeImg = new Image();
+treeImg.src = 'assets/large-tree-01.png';
+let treeImgReady = false;
+treeImg.onload = function() { treeImgReady = true; };
+
+const smallTreeImg = new Image();
+smallTreeImg.src = 'assets/small-tree-01.png';
+let smallTreeImgReady = false;
+smallTreeImg.onload = function() { smallTreeImgReady = true; };
+
+const moltenRockImg = new Image();
+moltenRockImg.src = 'assets/molten-rock.png';
+let moltenRockImgReady = false;
+moltenRockImg.onload = function() { moltenRockImgReady = true; };
 
 const titleImg = new Image();
 titleImg.src = 'assets/everything-is-lava-title.png';
@@ -610,7 +653,8 @@ const player = {
   kickTimer: 0,     // frames into kick animation
   facingRight: true, // last horizontal direction faced
   idleTimer: 0,      // frames since last movement input
-  crouching: false    // crouch state (down arrow / S key while grounded)
+  crouching: false,    // crouch state (down arrow / S key while grounded)
+  depthScale: 1        // perspective scale — >1 on front trees, <1 on back trees
 };
 
 // ── LAVA SYSTEMS ──
@@ -618,6 +662,55 @@ let lavaDrops = [];    // falling from sky
 let lavaPools = [];    // on the ground
 let particles = [];
 let warningMarkers = []; // where drops will land
+
+// ── ROLLING ROCKS (Level 4) ──
+let rocks = [];
+
+function spawnRock() {
+  const sizeRoll = Math.random();
+  let size, radius, speed;
+  if (sizeRoll < 0.55) {
+    size = 'medium'; radius = 22; speed = 1.8 + Math.random() * 0.8;
+  } else {
+    size = 'large'; radius = 35; speed = 1.2 + Math.random() * 0.6;
+  }
+  const knockback = { medium: 50, large: 80 };
+  const spawnX = scrollOffset + W + 50;
+  rocks.push({
+    worldX: spawnX,
+    originX: spawnX,
+    radius: radius,
+    speed: speed,
+    size: size,
+    knockback: knockback[size],
+    rotation: 0,
+    rotationSpeed: -(0.018 + Math.random() * 0.012),
+    vy: -(3.5 + Math.random() * 3),
+    bounceY: 0,
+    bounceDamping: 0.55 + Math.random() * 0.2
+  });
+}
+
+// ── MOLTEN ROCKS (Level 4) ──
+let moltenRocks = [];
+
+function spawnMoltenRock() {
+  // Large molten rocks only
+  let radius = 38, speed = 0.6 + Math.random() * 0.4;
+  const spawnX = scrollOffset + W + 50;
+  moltenRocks.push({
+    worldX: spawnX,
+    originX: spawnX,
+    radius: radius,
+    speed: speed,
+    rotation: 0,
+    rotationSpeed: -(0.018 + Math.random() * 0.012),
+    vy: -(3.5 + Math.random() * 3),
+    bounceY: 0,
+    bounceDamping: 0.55 + Math.random() * 0.2,
+    glowPhase: Math.random() * Math.PI * 2
+  });
+}
 
 // ── EMERGENCY VEHICLES ──
 let vehicles = [];
@@ -685,6 +778,82 @@ function generateBuildings() {
   }
 }
 
+// ── DESTROYED CITY RUINS (Level 4 background) ──
+let ruins_far = [];
+let ruins_mid = [];
+let ruins_near = [];
+
+function generateRuins() {
+  ruins_far = [];
+  ruins_mid = [];
+  ruins_near = [];
+  // Far ruins — jagged silhouettes
+  for (let x = 0; x < W + 600; x += 40 + Math.random() * 30) {
+    ruins_far.push({ x, w: 30 + Math.random() * 25, h: 40 + Math.random() * 80, jagged: Math.random() < 0.6 });
+  }
+  // Mid ruins — crumbled with glow
+  for (let x = 0; x < W + 600; x += 50 + Math.random() * 40) {
+    ruins_mid.push({ x, w: 35 + Math.random() * 30, h: 30 + Math.random() * 60, hasGlow: Math.random() < 0.3, glowPhase: Math.random() * Math.PI * 2 });
+  }
+  // Near ruins — rubble
+  for (let x = 0; x < W + 600; x += 60 + Math.random() * 50) {
+    ruins_near.push({ x, w: 25 + Math.random() * 35, h: 20 + Math.random() * 40 });
+  }
+}
+
+// ── BURNING VILLAGE (mid-ground parallax layer for Level 4) ──
+let burningVillage = [];
+
+function generateBurningVillage() {
+  burningVillage = [];
+  // Sparse structures spread across a wide world strip
+  // Types: hut, house, tower, shrine, collapsed
+  const types = ['hut', 'house', 'house', 'tower', 'shrine', 'collapsed', 'hut', 'collapsed'];
+  for (let x = 60; x < W + 1800; x += 140 + Math.random() * 220) {
+    const type = types[Math.floor(Math.random() * types.length)];
+    let w, h, roofH, roofStyle;
+    switch (type) {
+      case 'hut':
+        w = 28 + Math.random() * 14;
+        h = 30 + Math.random() * 18;
+        roofH = 14 + Math.random() * 8;
+        roofStyle = 'peaked';
+        break;
+      case 'house':
+        w = 36 + Math.random() * 20;
+        h = 40 + Math.random() * 25;
+        roofH = 12 + Math.random() * 10;
+        roofStyle = Math.random() < 0.5 ? 'peaked' : 'flat';
+        break;
+      case 'tower':
+        w = 18 + Math.random() * 10;
+        h = 65 + Math.random() * 40;
+        roofH = 10 + Math.random() * 6;
+        roofStyle = 'pointed';
+        break;
+      case 'shrine':
+        w = 44 + Math.random() * 16;
+        h = 35 + Math.random() * 15;
+        roofH = 18 + Math.random() * 10;
+        roofStyle = 'curved';
+        break;
+      case 'collapsed':
+        w = 30 + Math.random() * 25;
+        h = 15 + Math.random() * 20;
+        roofH = 0;
+        roofStyle = 'none';
+        break;
+    }
+    burningVillage.push({
+      x, w, h, roofH, roofStyle, type,
+      firePhase: Math.random() * Math.PI * 2,
+      fireIntensity: 0.4 + Math.random() * 0.6, // how much it burns
+      hasChimney: type === 'house' && Math.random() < 0.4,
+      lean: (Math.random() - 0.5) * 0.06 // slight structural lean
+    });
+  }
+}
+
 function randomDarkColor() {
   const r = 15 + Math.random() * 25;
   const g = 15 + Math.random() * 30;
@@ -728,22 +897,63 @@ function generateStreetLamps() {
   }
 }
 
+// ── TREES (world coords, jumpable platforms for level 4) ──
+// Trees are split into 3 depth layers:
+//   'back'  — behind ground, smaller/faded, no platforms
+//   'mid'   — on ground layer with player, has platforms
+//   'front' — in front of player, slightly larger/darker, no platforms
+let trees = [];
+const TREE_SPACING = 250; // tighter spacing since split across 3 layers
+
+function generateTrees() {
+  trees = [];
+  let lastWasTall = false;
+  for (let wx = 150; wx < 10000; ) {
+    // Trees become more sparse as the level progresses
+    const progress = wx / 10000; // 0 at start, 1 at end
+    const spacing = TREE_SPACING + progress * 350 + Math.random() * 60;
+    wx += spacing;
+    let sizeRoll = Math.random();
+    let size;
+    if (lastWasTall) {
+      size = 'medium';
+    } else {
+      size = sizeRoll < 0.6 ? 'medium' : 'tall';
+    }
+    lastWasTall = (size === 'tall');
+    const heights = { medium: 100, tall: 140 };
+    const canopyWidths = { medium: 50, tall: 60 };
+    const canopyHeights = { medium: 24, tall: 30 };
+    const trunkWidths = { medium: 12, tall: 16 };
+    // Some trees sit lower — partially buried or on uneven ground
+    const sinkRoll = Math.random();
+    const sinkExtra = sinkRoll < 0.35 ? 10 + Math.random() * 25 : 0;
+    // Assign depth layer: ~30% back, ~40% mid (platforms), ~30% front
+    const layerRoll = Math.random();
+    const layer = layerRoll < 0.3 ? 'back' : layerRoll < 0.7 ? 'mid' : 'front';
+    trees.push({
+      worldX: wx,
+      size: size,
+      layer: layer,
+      height: heights[size],
+      canopyW: canopyWidths[size],
+      canopyH: canopyHeights[size],
+      trunkW: trunkWidths[size],
+      flipped: Math.random() < 0.5,
+      sinkExtra: sinkExtra,
+      burning: false,
+      burnTimer: 0,
+      collapsed: false
+    });
+  }
+}
+
 // ── LAVA DROP SPAWNING ──
 // All lava objects use WORLD coordinates (worldX).
 // Screen position = worldX - scrollOffset
 function spawnLavaDrop() {
-  // Right 1/3 of screen gets increasing lava as level progresses
-  // First half: 25% on right third; second half: 45%
-  const levelProgress = levelTimer / levelDuration;
-  const rightThirdChance = levelProgress < 0.5 ? 0.25 : 0.45;
-  let screenTargetX;
-  if (Math.random() < rightThirdChance) {
-    // Drop in right 1/3
-    screenTargetX = W * 2/3 + Math.random() * (W * 1/3 - 80);
-  } else {
-    // Drop in left 2/3
-    screenTargetX = 80 + Math.random() * (W * 2/3 - 80);
-  }
+  // All drops land in the rightmost 10% of screen
+  let screenTargetX = W * 0.9 + Math.random() * (W * 0.1 - 20);
   const worldTargetX = screenTargetX + scrollOffset;
   warningMarkers.push({ worldX: worldTargetX, life: 60, maxLife: 60 });
   const savedScroll = scrollOffset;
@@ -758,7 +968,7 @@ function spawnLavaDrop() {
   }, 800);
 }
 
-function spawnLavaPool(worldX) {
+function spawnLavaPool(worldX, small) {
   // Check if there's already a pool nearby - merge
   for (const pool of lavaPools) {
     if (Math.abs(pool.worldX - worldX) < pool.w * 0.6) {
@@ -768,12 +978,15 @@ function spawnLavaPool(worldX) {
       return;
     }
   }
+  const poolW = small ? 20 + Math.random() * 15 : 40 + Math.random() * 30;
+  const poolLife = small ? 200 + Math.random() * 100 : 400 + Math.random() * 200;
+  const poolMaxLife = small ? 300 : 600;
   lavaPools.push({
     worldX: worldX,
-    w: 40 + Math.random() * 30,
+    w: poolW,
     h: 8,
-    life: 400 + Math.random() * 200,
-    maxLife: 600,
+    life: poolLife,
+    maxLife: poolMaxLife,
     intensity: 0.8,
     waveOffset: Math.random() * 6.28
   });
@@ -1085,7 +1298,7 @@ window.addEventListener('keydown', e => {
   // Konami code detection — enter code, then press 1/2/3 to jump to level
   if (konamiActive) {
     // Waiting for level number after code was entered
-    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : 0;
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : 0;
     if (levelNum > 0) {
       konamiActive = false;
       konamiUsed = true;
@@ -1119,7 +1332,16 @@ window.addEventListener('keydown', e => {
       player.invincible = 120;
       lavaDrops = []; lavaPools = []; particles = [];
       warningMarkers = []; vehicles = []; explosions = []; vehicleDebris = [];
-      generateBuildings(); generateStreetLamps();
+      rocks = []; moltenRocks = [];
+      generateBuildings();
+      if (levelNum < 4) {
+        generateStreetLamps();
+      }
+      if (levelNum === 4) {
+        generateTrees();
+        generateRuins();
+        generateBurningVillage();
+      }
       gameState = 'playing';
       musicStarted = true;
       levelMusic.currentTime = 0;
@@ -1327,6 +1549,8 @@ function clearGameState() {
   particles = [];
   warningMarkers = [];
   vehicles = [];
+  rocks = [];
+  moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
   shakeTimer = 0;
@@ -1353,7 +1577,7 @@ function clearGameState() {
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
-    level = Math.min(level + 1, 3);
+    level = Math.min(level + 1, 4);
     levelDuration = 1800 + level * 300;
   } else {
     level = 1;
@@ -1397,7 +1621,7 @@ function startGame() {
   deathTimer = 0;
   villageProgress = 0;
   player.x = 150;
-  player.y = GROUND_Y - SPRITE_H;
+  player.y = getGroundY(150 + scrollOffset) - SPRITE_H;
   player.vy = 0;
   player.vx = 0;
   player.grounded = true;
@@ -1418,10 +1642,19 @@ function startGame() {
   particles = [];
   warningMarkers = [];
   vehicles = [];
+  rocks = [];
+  moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
   generateBuildings();
-  generateStreetLamps();
+  if (level < 4) {
+    generateStreetLamps();
+  }
+  if (level === 4) {
+    generateTrees();
+    generateRuins();
+    generateBurningVillage();
+  }
 }
 
 function respawnPlayer() {
@@ -1429,7 +1662,7 @@ function respawnPlayer() {
   gameState = 'playing';
   deathTimer = 0;
   player.x = 150;
-  player.y = GROUND_Y - SPRITE_H;
+  player.y = getGroundY(150 + scrollOffset) - SPRITE_H;
   player.vy = 0;
   player.vx = 0;
   player.grounded = true;
@@ -1467,7 +1700,7 @@ function update() {
 
   // Village transition — last 600 frames (~10 seconds) of level 3
   const VILLAGE_LEAD_IN = 600;
-  if (level >= 3 && levelTimer > levelDuration - VILLAGE_LEAD_IN) {
+  if (level === 3 && levelTimer > levelDuration - VILLAGE_LEAD_IN) {
     villageProgress = Math.min(1, (levelTimer - (levelDuration - VILLAGE_LEAD_IN)) / VILLAGE_LEAD_IN);
     // Fade music as village approaches
     const v = muted ? 0 : masterVolume;
@@ -1479,7 +1712,7 @@ function update() {
   // Level complete?
   if (levelTimer >= levelDuration) {
     if (!konamiUsed) score += level * 1000;
-    if (level >= 3) {
+    if (level >= 4) {
       // Stop all gameplay audio
       levelMusic.pause();
       levelMusic.currentTime = 0;
@@ -1510,9 +1743,14 @@ function update() {
 
   // Spawn lava drops - rate increases with level and time
   // Taper off during village transition (lava stops near the village)
-  const dropRate = Math.max(15, 60 - level * 8 - levelTimer * 0.005);
+  const levelProgress = levelTimer / levelDuration;
+  // No lava drops in 2nd half of level 2-1
+  const noDrops = level === 4 && levelProgress >= 0.5;
+  const dropRate = level === 4
+    ? Math.max(80, 140 - levelTimer * 0.007)
+    : Math.max(60, 180 - level * 8 - levelTimer * 0.005);
   const lavaChance = villageProgress > 0.5 ? Math.max(0, 1 - (villageProgress - 0.5) * 2) : 1;
-  if (frameCount % Math.floor(dropRate) === 0 && Math.random() < lavaChance) {
+  if (!noDrops && frameCount % Math.floor(dropRate) === 0 && Math.random() < lavaChance) {
     spawnLavaDrop();
   }
 
@@ -1621,27 +1859,67 @@ function update() {
   }
 
   // Street lamp platform collision (check before ground so lamps take priority)
-  for (const lamp of streetLamps) {
-    const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
-    const platLeft = lsx - lamp.lampW / 2;
-    const platRight = lsx + lamp.lampW / 2;
-    const platTop = GROUND_Y - lamp.poleH - lamp.lampH;
-    const platBot = GROUND_Y - lamp.poleH;
+  if (level < 4) {
+    for (const lamp of streetLamps) {
+      const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
+      const platLeft = lsx - lamp.lampW / 2;
+      const platRight = lsx + lamp.lampW / 2;
+      const platTop = GROUND_Y - lamp.poleH - lamp.lampH;
+      const platBot = GROUND_Y - lamp.poleH;
 
-    // Player is above the platform and falling onto it
-    if (
-      player.vy >= 0 &&
-      player.x + player.w > platLeft &&
-      player.x < platRight &&
-      player.y + player.h >= platTop &&
-      player.y + player.h <= platBot + player.vy + 4
-    ) {
-      player.y = platTop - player.h;
-      player.vy = 0;
-      player.grounded = true;
-      player.jumping = false;
-      player.doubleJumped = false;
+      // Player is above the platform and falling onto it
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > platLeft &&
+        player.x < platRight &&
+        player.y + player.h >= platTop &&
+        player.y + player.h <= platBot + player.vy + 4
+      ) {
+        player.y = platTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+      }
     }
+  }
+
+  // Tree platform collision (level 4)
+  if (level === 4) {
+    let onTree = false;
+    for (const t of trees) {
+      if (t.collapsed || t.layer === 'back') continue; // mid + front trees have platforms
+      const tsx = t.worldX - scrollOffset;
+      if (tsx < -100 || tsx > W + 100) continue;
+      const baseY = getGroundY(t.worldX);
+      const layerScale = t.layer === 'front' ? 1.15 : 1.0;
+      const totalH = (t.height + t.canopyH) * layerScale;
+      const platTop = baseY - totalH * 0.6; // platform at 60% of tree height
+      const platBot = platTop + t.canopyH * layerScale * 0.3;
+      const halfW = (t.canopyW * layerScale) / 2;
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > tsx - halfW &&
+        player.x < tsx + halfW &&
+        player.y + player.h >= platTop &&
+        player.y + player.h <= platBot + player.vy + 4
+      ) {
+        player.y = platTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+        // Scale player based on tree layer
+        player.depthScale = t.layer === 'front' ? 1.12 : 1.0;
+        onTree = true;
+      }
+    }
+    // Reset scale when back on ground
+    if (!onTree && player.grounded) {
+      player.depthScale += (1 - player.depthScale) * 0.15; // smooth lerp back
+    }
+  } else {
+    player.depthScale = 1;
   }
 
   // Firetruck ladder platform collision (extended ladder trucks only)
@@ -1730,8 +2008,9 @@ function update() {
   }
 
   // Ground collision
-  if (player.y + player.h >= GROUND_Y) {
-    player.y = GROUND_Y - player.h;
+  const playerGroundY = getGroundY(player.x + scrollOffset);
+  if (player.y + player.h >= playerGroundY) {
+    player.y = playerGroundY - player.h;
     player.vy = 0;
     player.grounded = true;
     player.jumping = false;
@@ -1760,9 +2039,10 @@ function update() {
     const screenX = d.worldX - scrollOffset;
 
     // Hit ground
-    if (d.y >= GROUND_Y - 4) {
-      spawnParticles(screenX, GROUND_Y, '#ff4400', 8, 4);
-      spawnParticles(screenX, GROUND_Y, '#ffaa00', 5, 3);
+    const dropGroundY = getGroundY(d.worldX);
+    if (d.y >= dropGroundY - 4) {
+      spawnParticles(screenX, dropGroundY, '#ff4400', 8, 4);
+      spawnParticles(screenX, dropGroundY, '#ffaa00', 5, 3);
       spawnLavaPool(d.worldX);
       playLavaHit();
       lavaDrops.splice(i, 1);
@@ -1808,6 +2088,160 @@ function update() {
     }
   }
 
+  // Lava-tree contact detection (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.burning || t.collapsed) continue;
+      const tsx = t.worldX - scrollOffset;
+      const baseY = getGroundY(t.worldX);
+      const treeTop = baseY - t.height - t.canopyH;
+      // Check lava drops
+      for (const d of lavaDrops) {
+        const dsx = d.worldX - scrollOffset;
+        if (Math.abs(dsx - tsx) < t.canopyW / 2 + 10 && d.y >= treeTop && d.y <= baseY) {
+          t.burning = true;
+          break;
+        }
+      }
+      // Check lava pools under the tree
+      if (!t.burning) {
+        for (const p of lavaPools) {
+          const psx = p.worldX - scrollOffset;
+          if (Math.abs(psx - tsx) < (p.w / 2 + t.trunkW / 2)) {
+            t.burning = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Burn timer update (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.burning && !t.collapsed) {
+        t.burnTimer++;
+        if (t.burnTimer >= 210) {
+          t.collapsed = true;
+          // Ember particles
+          const tsx = t.worldX - scrollOffset;
+          const baseY = getGroundY(t.worldX);
+          for (let i = 0; i < 8; i++) {
+            particles.push({
+              x: tsx + (Math.random() - 0.5) * t.canopyW,
+              y: baseY - t.height - Math.random() * t.canopyH,
+              vx: (Math.random() - 0.5) * 2,
+              vy: -1 - Math.random() * 2,
+              life: 60 + Math.random() * 40,
+              maxLife: 100,
+              color: `rgb(255, ${100 + Math.random() * 100 | 0}, 0)`
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Rolling rocks (level 4)
+  if (level === 4) {
+    const progress = levelTimer / levelDuration;
+    let rockRate;
+    if (progress < 0.33) rockRate = 200;
+    else if (progress < 0.66) rockRate = 140;
+    else rockRate = 100;
+    if (levelTimer % rockRate === 0) spawnRock();
+
+    for (let i = rocks.length - 1; i >= 0; i--) {
+      const r = rocks[i];
+      r.worldX -= r.speed;
+      r.rotation += r.rotationSpeed;
+      // Bounce physics
+      r.vy += 0.3;
+      r.bounceY += r.vy;
+      if (r.bounceY >= 0) {
+        r.bounceY = 0;
+        if (Math.abs(r.vy) > 0.8) {
+          r.vy = -Math.abs(r.vy) * r.bounceDamping;
+        } else {
+          r.vy = 0;
+        }
+      }
+      // Remove if off screen left
+      if (r.worldX < scrollOffset - 100) {
+        rocks.splice(i, 1);
+        continue;
+      }
+      // Player collision — knockback only, no kill
+      if (!player.invincible) {
+        const sx = r.worldX - scrollOffset;
+        const cy = getGroundY(r.worldX) - r.radius + (r.bounceY || 0);
+        const px = player.x + player.w / 2;
+        const py = player.y + player.h / 2;
+        const dx = px - sx;
+        const dy = py - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < r.radius + player.w / 3) {
+          player.x -= r.knockback;
+          if (player.x < 0) player.x = 0;
+          player.invincible = 20;
+          shakeTimer = 8;
+          spawnParticles(sx, cy, '#8b7355', 8, 4);
+        }
+      }
+    }
+  }
+
+  // Molten rocks (level 4)
+  if (level === 4) {
+    const progress = levelTimer / levelDuration;
+    // Molten rocks only spawn in 2nd half of level 2-1
+    if (progress >= 0.5) {
+      let moltenRate;
+      if (progress < 0.75) moltenRate = 200;
+      else moltenRate = 120;
+      if ((levelTimer + 50) % moltenRate === 0) spawnMoltenRock();
+    }
+
+    for (let i = moltenRocks.length - 1; i >= 0; i--) {
+      const mr = moltenRocks[i];
+      mr.worldX -= mr.speed;
+      mr.rotation += mr.rotationSpeed;
+      mr.glowPhase += 0.1;
+      // Bounce physics — same as regular rocks
+      mr.vy += 0.3;
+      mr.bounceY += mr.vy;
+      if (mr.bounceY >= 0) {
+        mr.bounceY = 0;
+        if (Math.abs(mr.vy) > 0.8) {
+          mr.vy = -Math.abs(mr.vy) * mr.bounceDamping;
+        } else {
+          mr.vy = 0;
+        }
+      }
+      // Remove if off screen left
+      if (mr.worldX < scrollOffset - 100) {
+        moltenRocks.splice(i, 1);
+        continue;
+      }
+      // No lava trail — molten rocks roll clean
+      if (false) {
+        spawnLavaPool(mr.worldX, true);
+      }
+      // Player collision — INSTANT KILL
+      const sx = mr.worldX - scrollOffset;
+      const cy = getGroundY(mr.worldX) - mr.radius;
+      const px = player.x + player.w / 2;
+      const py = player.y + player.h / 2;
+      const dx = px - sx;
+      const dy = py - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < mr.radius + player.w / 3) {
+        die();
+        return;
+      }
+    }
+  }
+
   // Update warning markers (world coords)
   for (let i = warningMarkers.length - 1; i >= 0; i--) {
     warningMarkers[i].life--;
@@ -1827,27 +2261,29 @@ function update() {
   // Update neon sign blinking
   for (let si = 0; si < neonSigns.length; si++) neonSigns[si].blink += neonSigns[si].blinkSpeed;
 
-  // Spawn emergency vehicles:
-  // 0) Level 1: school bus right away — sets the tone
-  // 1) School bus at exactly 1/3 mark
-  // 2) Regular vehicle shortly after
-  // 3) More frequent random spawns in second half, biased from right
-  if (level === 1 && levelTimer === 60) {
-    spawnVehicle('schoolbus');
-  }
-  // Guaranteed ladder truck early in level 2
-  if (level === 2 && levelTimer === 90) {
-    spawnVehicle('firetruck', true);
-  }
-  const thirdMark = Math.floor(levelDuration / 3);
-  if (levelTimer === thirdMark) {
-    spawnVehicle('schoolbus');
-  }
-  if (levelTimer === thirdMark + 60) {
-    spawnVehicle(); // follow-up emergency vehicle
-  }
-  if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
-    spawnVehicle();
+  // Spawn emergency vehicles (no vehicles in level 4 — destroyed wasteland):
+  if (level < 4) {
+    // 0) Level 1: school bus right away — sets the tone
+    // 1) School bus at exactly 1/3 mark
+    // 2) Regular vehicle shortly after
+    // 3) More frequent random spawns in second half, biased from right
+    if (level === 1 && levelTimer === 60) {
+      spawnVehicle('schoolbus');
+    }
+    // Guaranteed ladder truck early in level 2
+    if (level === 2 && levelTimer === 90) {
+      spawnVehicle('firetruck', true);
+    }
+    const thirdMark = Math.floor(levelDuration / 3);
+    if (levelTimer === thirdMark) {
+      spawnVehicle('schoolbus');
+    }
+    if (levelTimer === thirdMark + 60) {
+      spawnVehicle(); // follow-up emergency vehicle
+    }
+    if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
+      spawnVehicle();
+    }
   }
 
   // Update vehicles + siren audio
@@ -2693,6 +3129,353 @@ function drawDojo() {
 // ── DRAWING ──
 // ══════════════════════════════
 
+// ── DESTROYED CITY SKY (Level 4) ──
+function drawDestroyedCitySky() {
+  // ── Level 2-1 background image (cover scaling + slow parallax) ──
+  if (level2BgReady) {
+    const imgAspect = level2BgImg.width / level2BgImg.height;
+    const canvasAspect = W / H;
+    let drawW, drawH;
+    if (canvasAspect > imgAspect) {
+      drawW = W;
+      drawH = W / imgAspect;
+    } else {
+      drawH = H;
+      drawW = H * imgAspect;
+    }
+    // Ping-pong parallax (same approach as volcano bg — never exceeds coverage)
+    const maxShift = Math.max(1, (drawW - W) / 2);
+    const rawShift = (scrollOffset * 0.01) % (maxShift * 2);
+    const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
+    const drawX = (W - drawW) / 2 + shiftX;
+    const drawY = (H - drawH) / 2;
+    ctx.drawImage(level2BgImg, drawX, drawY, drawW, drawH);
+  } else {
+    // Fallback gradient if image hasn't loaded yet
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+    skyGrad.addColorStop(0, '#1a0505');
+    skyGrad.addColorStop(0.4, '#3d1111');
+    skyGrad.addColorStop(1, '#5a1a0a');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, W, H);
+  }
+  // Ash particles
+  for (let i = 0; i < 20; i++) {
+    const hash = (i * 7919 + Math.floor(frameCount * 0.3)) & 0xFFFF;
+    const ax = hash % W;
+    const ay = (hash * 3 + frameCount * 0.5) % H;
+    ctx.fillStyle = `rgba(180, 160, 140, ${0.2 + (hash % 30) / 100})`;
+    ctx.fillRect(ax, ay, 2, 2);
+  }
+}
+
+// ── RUINS LAYER (Level 4 parallax) ──
+function drawRuinsLayer(ruins, parallaxSpeed, brightness, isNear) {
+  const offset = scrollOffset * parallaxSpeed;
+  const baseY = GROUND_Y; // background uses flat baseline
+  for (let i = 0; i < ruins.length; i++) {
+    const r = ruins[i];
+    const sx = ((r.x - offset) % (W + 600) + W + 600) % (W + 600) - 300;
+    if (sx + r.w < -50 || sx > W + 50) continue;
+
+    const bri = Math.floor(brightness * 40);
+    const rb = 30 + bri;
+    const gb = 15 + bri;
+    const bb = 10 + bri;
+    ctx.fillStyle = `rgb(${rb},${gb},${bb})`;
+
+    if (r.jagged) {
+      // Jagged broken roofline
+      ctx.beginPath();
+      ctx.moveTo(sx, baseY);
+      ctx.lineTo(sx, baseY - r.h);
+      // Jagged top edge
+      const jaggedW = r.w;
+      const segments = 3 + (i % 3);
+      for (let j = 1; j <= segments; j++) {
+        const jx = sx + (jaggedW * j / segments);
+        const jy = baseY - r.h + ((j % 2 === 0) ? 8 + (i % 5) * 3 : -4 - (i % 4) * 2);
+        ctx.lineTo(jx, jy);
+      }
+      ctx.lineTo(sx + r.w, baseY - r.h * 0.6);
+      ctx.lineTo(sx + r.w, baseY);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // Simple crumbled rectangle
+      ctx.fillRect(sx, baseY - r.h, r.w, r.h);
+    }
+
+    // Mid buildings with glow: flickering orange windows
+    if (r.hasGlow) {
+      const flicker = 0.3 + 0.4 * Math.sin(frameCount * 0.04 + r.glowPhase);
+      ctx.fillStyle = `rgba(255, 120, 30, ${flicker})`;
+      const winW = 4, winH = 5;
+      for (let wy = baseY - r.h + 8; wy < baseY - 6; wy += 12) {
+        for (let wx = sx + 4; wx < sx + r.w - 6; wx += 10) {
+          if (((wx * 13 + wy * 7) & 7) < 3) {
+            ctx.fillRect(wx, wy, winW, winH);
+          }
+        }
+      }
+    }
+
+    // Near layer: occasional ember particles (drawn inline, no allocation)
+    if (isNear && (i % 3 === 0)) {
+      const et = frameCount * 0.02 + i * 2.3;
+      const ex = sx + r.w * 0.5 + Math.sin(et * 1.3) * 6;
+      const ey = baseY - r.h - 5 - ((frameCount + i * 47) % 30);
+      const ea = 0.4 + 0.3 * Math.sin(et * 2);
+      ctx.fillStyle = `rgba(255, 80, 20, ${ea})`;
+      ctx.fillRect(ex, ey, 2, 2);
+    }
+  }
+}
+
+// ── MID-GROUND DEAD FOREST — procedural silhouette trees ──
+function drawMidgroundForest() {
+  const parallax = 0.25;
+  const offset = scrollOffset * parallax;
+  const baseY = GROUND_Y + 4;
+  const wrapW = W + 2400;
+  // Deterministic seed-based generation — no stored array needed
+  const treeCount = 30;
+
+  for (let i = 0; i < treeCount; i++) {
+    // Deterministic pseudo-random per tree
+    const seed = i * 7919 + 1301;
+    const h1 = ((seed * 2654435761) >>> 0) & 0xFFFF;
+    const h2 = ((seed * 48271 + 13) >>> 0) & 0xFFFF;
+    const h3 = ((seed * 16807 + 97) >>> 0) & 0xFFFF;
+
+    const worldX = (h1 % wrapW);
+    let sx = ((worldX - offset) % wrapW + wrapW) % wrapW - 200;
+    if (sx < -80 || sx > W + 80) continue;
+
+    // Tree dimensions — varied heights
+    const trunkH = 40 + (h1 % 50);
+    const trunkW = 2 + (h2 % 3);
+    const branchCount = 2 + (h2 % 4);
+
+    // Shadow colour — very dark, slightly warm
+    const shade = 6 + (h3 % 6);
+    ctx.fillStyle = `rgb(${shade + 2},${shade},${shade - 2})`;
+    ctx.globalAlpha = 0.3 + (h3 % 20) / 100;
+
+    // ── Trunk ──
+    const lean = ((h2 % 7) - 3) * 0.02; // slight lean
+    ctx.save();
+    ctx.translate(sx, baseY);
+    ctx.transform(1, 0, lean, 1, 0, 0);
+
+    ctx.fillRect(-trunkW / 2, -trunkH, trunkW, trunkH);
+
+    // ── Branches — angular lines from trunk ──
+    for (let b = 0; b < branchCount; b++) {
+      const bSeed = ((seed + b * 3571) * 16807) >>> 0;
+      const bY = -trunkH * (0.35 + (b * 0.2));  // branch height along trunk
+      const bDir = (bSeed & 1) ? 1 : -1;         // left or right
+      const bLen = 10 + (bSeed % 20);
+      const bAngle = 0.3 + (bSeed % 10) * 0.06;  // angle from vertical
+      const bEndX = bDir * Math.sin(bAngle) * bLen;
+      const bEndY = bY - Math.cos(bAngle) * bLen;
+
+      ctx.fillRect(
+        Math.min(0, bEndX) - 0.5,
+        Math.min(bY, bEndY),
+        Math.abs(bEndX) + 1,
+        1
+      );
+
+      // Sub-branch twig
+      if (bLen > 15) {
+        const twigLen = 5 + (bSeed % 8);
+        const twigX = bEndX + bDir * twigLen * 0.5;
+        const twigY = bEndY - twigLen * 0.7;
+        ctx.fillRect(
+          Math.min(bEndX, twigX) - 0.5,
+          Math.min(bEndY, twigY),
+          Math.abs(twigX - bEndX) + 1,
+          1
+        );
+      }
+    }
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ── BURNING VILLAGE — mid-ground shadow silhouettes with fire ──
+function drawBurningVillage() {
+  const parallax = 0.35;
+  const offset = scrollOffset * parallax;
+  const baseY = GROUND_Y + 8; // sits just at/below ground line (distant, behind ground)
+  const wrapW = W + 1800;
+
+  for (const v of burningVillage) {
+    // Parallax wrap
+    let sx = ((v.x - offset) % wrapW + wrapW) % wrapW - 300;
+    if (sx + v.w < -60 || sx > W + 60) continue;
+
+    const bx = sx;
+    const by = baseY - v.h;
+    const lean = v.lean;
+
+    ctx.save();
+    // Apply slight structural lean
+    if (lean !== 0) {
+      ctx.transform(1, 0, lean, 1, 0, 0);
+    }
+
+    // ── All structures drawn as deep shadow silhouettes ──
+    const shadow = 'rgb(8,5,3)';
+    const shadowLight = 'rgb(14,9,6)';
+
+    if (v.type === 'collapsed') {
+      // Rubble heap — jagged low polygon
+      ctx.fillStyle = shadow;
+      ctx.beginPath();
+      ctx.moveTo(bx, baseY);
+      ctx.lineTo(bx + 3, baseY - v.h * 0.8);
+      ctx.lineTo(bx + v.w * 0.3, baseY - v.h);
+      ctx.lineTo(bx + v.w * 0.5, baseY - v.h * 0.6);
+      ctx.lineTo(bx + v.w * 0.7, baseY - v.h * 0.9);
+      ctx.lineTo(bx + v.w, baseY - v.h * 0.3);
+      ctx.lineTo(bx + v.w, baseY);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // ── Main wall ──
+      ctx.fillStyle = shadow;
+      ctx.fillRect(bx, by, v.w, v.h);
+
+      // Slight edge highlight on one side
+      ctx.fillStyle = shadowLight;
+      ctx.fillRect(bx, by, 2, v.h);
+
+      // ── Roof ──
+      if (v.roofStyle === 'peaked') {
+        ctx.fillStyle = shadow;
+        ctx.beginPath();
+        ctx.moveTo(bx - 4, by);
+        ctx.lineTo(bx + v.w / 2, by - v.roofH);
+        ctx.lineTo(bx + v.w + 4, by);
+        ctx.closePath();
+        ctx.fill();
+      } else if (v.roofStyle === 'pointed') {
+        // Tall spire for towers
+        ctx.fillStyle = shadow;
+        ctx.beginPath();
+        ctx.moveTo(bx - 2, by);
+        ctx.lineTo(bx + v.w / 2, by - v.roofH * 1.5);
+        ctx.lineTo(bx + v.w + 2, by);
+        ctx.closePath();
+        ctx.fill();
+      } else if (v.roofStyle === 'curved') {
+        // Pagoda-style curved eaves
+        ctx.fillStyle = shadow;
+        ctx.beginPath();
+        ctx.moveTo(bx - 8, by + 2);
+        // Left eave curves up
+        ctx.quadraticCurveTo(bx + v.w * 0.15, by - v.roofH * 0.4, bx + v.w / 2, by - v.roofH);
+        // Right eave curves up
+        ctx.quadraticCurveTo(bx + v.w * 0.85, by - v.roofH * 0.4, bx + v.w + 8, by + 2);
+        ctx.closePath();
+        ctx.fill();
+        // Second tier (smaller)
+        if (v.h > 40) {
+          ctx.beginPath();
+          const tier2Y = by + v.h * 0.4;
+          ctx.moveTo(bx - 5, tier2Y + 2);
+          ctx.quadraticCurveTo(bx + v.w * 0.2, tier2Y - 6, bx + v.w / 2, tier2Y - 10);
+          ctx.quadraticCurveTo(bx + v.w * 0.8, tier2Y - 6, bx + v.w + 5, tier2Y + 2);
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else if (v.roofStyle === 'flat') {
+        // Flat roof with slight lip
+        ctx.fillStyle = shadowLight;
+        ctx.fillRect(bx - 2, by - 2, v.w + 4, 3);
+      }
+
+      // ── Chimney ──
+      if (v.hasChimney) {
+        ctx.fillStyle = shadow;
+        const cx = bx + v.w * 0.75;
+        ctx.fillRect(cx, by - v.roofH * 0.6, 5, v.roofH * 0.6 + 4);
+      }
+
+      // ── Dark window holes (barely visible against shadow) ──
+      ctx.fillStyle = 'rgb(3,2,1)';
+      const winSize = Math.min(5, v.w / 6);
+      const cols = Math.max(1, Math.floor(v.w / 14));
+      const rows = Math.max(1, Math.floor(v.h / 18));
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const wx = bx + 5 + col * (v.w - 10) / Math.max(1, cols);
+          const wy = by + 8 + row * 16;
+          if (wy < baseY - 8) {
+            ctx.fillRect(wx, wy, winSize, winSize + 1);
+          }
+        }
+      }
+    }
+
+    ctx.restore();
+
+    // ── FIRE EFFECTS — subtle, small, distant ──
+    const fi = v.fireIntensity;
+    const phase = v.firePhase;
+    const t = frameCount * 0.04;
+
+    // Small, sparse flame tips along the roofline
+    const flameCount = Math.floor(1 + fi * 2);
+    const roofTop = v.type === 'collapsed' ? baseY - v.h : by - v.roofH * 0.5;
+
+    for (let f = 0; f < flameCount; f++) {
+      const frac = (f + 0.5) / flameCount;
+      const sway = Math.sin(t * 2.5 + phase + f * 3.1) * 1.2;
+      const fx = bx + v.w * frac + sway;
+
+      // Gentle flicker
+      const flickerMul = 0.5 + 0.5 * Math.sin(t * 3.0 + phase + f * 2.3);
+      const flameH = (4 + fi * 7) * flickerMul;
+      const flameW = 2 + fi * 2;
+
+      // Single small flame shape — muted orange
+      ctx.globalAlpha = 0.25 + 0.2 * flickerMul;
+      ctx.fillStyle = flickerMul > 0.6 ? '#aa4400' : '#773300';
+      ctx.beginPath();
+      ctx.moveTo(fx - flameW / 2, roofTop);
+      ctx.quadraticCurveTo(fx, roofTop - flameH * 0.7, fx + sway * 0.15, roofTop - flameH);
+      ctx.quadraticCurveTo(fx, roofTop - flameH * 0.7, fx + flameW / 2, roofTop);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // ── Faint warm glow — very subtle ──
+    const glowPulse = 0.04 + 0.04 * Math.sin(t * 1.5 + phase);
+    ctx.globalAlpha = glowPulse * fi;
+    ctx.fillStyle = '#ff4400';
+    ctx.fillRect(bx - 4, roofTop - v.h * 0.2, v.w + 8, v.h * 0.3);
+    ctx.globalAlpha = 1;
+
+    // ── One or two faint embers drifting up ──
+    if (fi > 0.4) {
+      const ePhase = t * 0.6 + phase;
+      const life = (ePhase % 3.0) / 3.0;
+      const ex = bx + v.w * 0.5 + Math.sin(ePhase * 1.1) * v.w * 0.3;
+      const ey = roofTop - life * 25 - 3;
+      ctx.globalAlpha = (1 - life) * 0.3;
+      ctx.fillStyle = '#cc5522';
+      ctx.fillRect(ex, ey, 1, 1);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
 function drawNeoTokyoSky() {
   // ── VOLCANO IMAGE AS FULL BACKGROUND ──
   if (volcanoReady) {
@@ -3009,6 +3792,164 @@ function drawStreet() {
   }
 }
 
+function drawVolcanicGround() {
+  const so = scrollOffset;
+  const P = 4; // pixel grid — everything snaps to P×P blocks
+
+  // Helper: snap to pixel grid
+  function px(x, y, w, h, c) {
+    ctx.fillStyle = c;
+    ctx.fillRect(
+      Math.floor(x / P) * P,
+      Math.floor(y / P) * P,
+      Math.max(P, Math.floor(w / P) * P),
+      Math.max(P, Math.floor(h / P) * P)
+    );
+  }
+
+  // Palette — fixed 32-bit colours, no gradients
+  const PAL = {
+    deep:     '#0c0604',  // deepest layer
+    dark:     '#160d08',  // dark soil
+    mid:      '#24160e',  // mid brown
+    surface:  '#362010',  // surface rock
+    light:    '#4a2e1a',  // highlight rock
+    edge:     '#5c3820',  // bright edge
+    shadow:   '#080402',  // crack shadow
+    lavaD:    '#882200',  // dark lava
+    lava:     '#cc4400',  // lava
+    lavaB:    '#ff6600',  // bright lava
+    lavaH:    '#ffaa22',  // hot lava core
+    ember:    '#ff8844',  // ember
+    smoke:    '#1a1614',  // smoke pixel
+  };
+
+  // ── 1. Base fill — banded flat colours (no gradients) ──
+  // Fill column by column in P-wide strips, banded by depth
+  for (let sx = 0; sx < W; sx += P) {
+    const gy = Math.floor(getGroundY(sx + so) / P) * P; // snap ground Y
+    if (gy >= H) continue;
+
+    // Band 1: surface layer (first 2 rows)
+    px(sx, gy, P, P * 2, PAL.surface);
+    // Band 2: mid layer
+    px(sx, gy + P * 2, P, P * 3, PAL.mid);
+    // Band 3: dark layer
+    px(sx, gy + P * 5, P, P * 3, PAL.dark);
+    // Band 4: deep to bottom
+    const deepY = gy + P * 8;
+    if (deepY < H) {
+      px(sx, deepY, P, H - deepY, PAL.deep);
+    }
+  }
+
+  // ── 2. Jagged rocky surface — stepped pixel peaks ──
+  for (let sx = 0; sx < W; sx += P) {
+    const worldX = sx + so;
+    const h = ((worldX * 2654435761) >>> 0);
+    const gy = Math.floor(getGroundY(worldX) / P) * P;
+
+    // Deterministic peak height in pixel units (0-3 blocks above surface)
+    const peakBlocks = (h % 5); // 0,1,2,3,4 blocks
+    const peakColor = (h >> 4) % 3;
+    const colors = [PAL.surface, PAL.light, PAL.mid];
+
+    // Stack pixel blocks upward for the peak
+    for (let b = 0; b < peakBlocks; b++) {
+      const bx = sx;
+      const by = gy - (b + 1) * P;
+      // Narrower at top — skip side blocks on taller peaks
+      if (b >= 2 && ((h >> 8) & 1)) continue;
+      ctx.fillStyle = b === 0 ? colors[peakColor] : (b < 2 ? PAL.mid : PAL.dark);
+      ctx.fillRect(bx, by, P, P);
+    }
+
+    // Top highlight pixel on the highest block
+    if (peakBlocks > 1 && (h >> 6) % 3 === 0) {
+      ctx.fillStyle = PAL.edge;
+      ctx.fillRect(sx, gy - peakBlocks * P, P, P);
+    }
+  }
+
+  // ── 3. Rock texture — deterministic scattered pixel blocks ──
+  for (let sx = 0; sx < W; sx += P * 2) {
+    const worldX = sx + so;
+    const h = ((worldX * 48271) >>> 0) & 0xFFFF;
+    if ((h & 7) > 5) continue;
+
+    const gy = Math.floor(getGroundY(worldX) / P) * P;
+    const depthRow = (h % 4); // which row below surface
+    const ry = gy + P + depthRow * P * 2;
+    if (ry >= H) continue;
+
+    // Colour: lighter near surface, darker below
+    const rowColors = [PAL.light, PAL.surface, PAL.mid, PAL.dark];
+    ctx.fillStyle = rowColors[depthRow];
+    ctx.fillRect(sx, ry, P, P);
+
+    // Highlight pixel above some surface-row rocks
+    if (depthRow === 0 && (h & 16)) {
+      ctx.fillStyle = PAL.edge;
+      ctx.fillRect(sx, ry - P, P, P);
+    }
+
+    // Shadow pixel below some rocks
+    if (depthRow < 2 && (h & 32)) {
+      ctx.fillStyle = PAL.shadow;
+      ctx.fillRect(sx, ry + P, P, P);
+    }
+  }
+
+  // ── 4. Crevice pixels — dark gap blocks between rocks ──
+  for (let sx = 0; sx < W; sx += P * 4) {
+    const worldX = sx + so;
+    const h = ((worldX * 16807) >>> 0) & 0xFFFF;
+    if ((h & 3) !== 0) continue;
+
+    const gy = Math.floor(getGroundY(worldX) / P) * P;
+    // Vertical crack: 2-4 pixels deep
+    const crackDepth = 2 + (h % 3);
+    for (let d = 0; d < crackDepth; d++) {
+      const cx = sx + ((h >> (d + 4)) & 1) * P; // jag left/right
+      const cy = gy + P * (d + 1);
+      if (cy < H) {
+        ctx.fillStyle = PAL.shadow;
+        ctx.fillRect(cx, cy, P, P);
+      }
+    }
+  }
+
+
+  // ── 6. Ember pixels — rising from lava ──
+  for (let i = 0; i < 6; i++) {
+    const seed = ((Math.floor(frameCount / 4) * 3 + i * 1931) >>> 0) & 0xFFFF;
+    const ex = Math.floor(((seed * 7 + i * 137) % W) / P) * P;
+    const gy = Math.floor(getGroundY(ex + so) / P) * P;
+    const life = ((Math.floor(frameCount / 3) + i * 17) % 12);
+    const ey = gy - life * P;
+    if (ey < gy - P * 10) continue;
+    ctx.globalAlpha = Math.max(0, 1 - life / 12) * 0.7;
+    ctx.fillStyle = life < 4 ? PAL.lavaH : PAL.ember;
+    ctx.fillRect(ex, ey, P, P);
+  }
+  ctx.globalAlpha = 1;
+
+  // ── 7. Smoke pixels — chunky square puffs rising ──
+  for (let i = 0; i < 5; i++) {
+    const hash = ((Math.floor(so / 250) + i) * 4391) & 0xFFFF;
+    const wsx = Math.floor(((hash % W) + W) % W / P) * P;
+    const wgy = Math.floor(getGroundY(wsx + so) / P) * P;
+    const tick = Math.floor(frameCount / 6 + i * 11) % 16;
+    const wy = wgy - tick * P;
+    if (tick > 12) continue;
+    const size = (tick < 4 ? 1 : tick < 8 ? 2 : 3) * P;
+    ctx.globalAlpha = Math.max(0, (1 - tick / 14)) * 0.15;
+    ctx.fillStyle = PAL.smoke;
+    ctx.fillRect(wsx, wy, size, size);
+  }
+  ctx.globalAlpha = 1;
+}
+
 // Pool depth helper — hoisted out of per-frame loop to avoid closure allocation
 function poolDepthAt(col, totalCols, taperCols, maxDepth) {
   if (col < taperCols) {
@@ -3031,6 +3972,7 @@ function drawLavaPools() {
     const fadeIn = Math.min(1, (p.maxLife - p.life) / 30);
     const fadeOut = Math.min(1, p.life / 60);
     const alpha = fadeIn * fadeOut * p.intensity;
+    const poolGY = level === 4 ? getGroundY(p.worldX) : GROUND_Y;
 
     // Snap pool to pixel grid
     const lx = Math.round((screenX - p.w / 2) / P) * P;
@@ -3046,7 +3988,7 @@ function drawLavaPools() {
       const gw = pw + g * P * 4;
       const gx = lx - g * P * 2;
       ctx.fillStyle = `rgba(255, ${40 + g * 15}, 0, ${0.08 / g})`;
-      ctx.fillRect(gx, GROUND_Y - g * P, gw, g * P * 2 + P);
+      ctx.fillRect(gx, poolGY - g * P, gw, g * P * 2 + P);
     }
 
     // ── Main pool body (tapered rows of chunky pixels) ──
@@ -3057,7 +3999,7 @@ function drawLavaPools() {
       const colX = lx + col * P;
       const depth = poolDepthAt(col, totalCols, taperCols, maxDepth);
       for (let row = 0; row < depth; row++) {
-        const rowY = GROUND_Y + row * P;
+        const rowY = poolGY + row * P;
         const hash = ((col * 7 + row * 13 + Math.floor(frameCount * 0.08 + p.waveOffset)) & 0xFF);
         const colorIdx = hash % lavaColors.length;
         ctx.fillStyle = lavaColors[colorIdx];
@@ -3071,10 +4013,10 @@ function drawLavaPools() {
       const surfaceAnim = Math.sin((col + frameCount * 0.05 + p.waveOffset) * 0.8);
       if (surfaceAnim > 0.2) {
         ctx.fillStyle = '#ff8800';
-        ctx.fillRect(colX, GROUND_Y - P, P, P);
+        ctx.fillRect(colX, poolGY - P, P, P);
       } else if (surfaceAnim > -0.3) {
         ctx.fillStyle = '#dd4400';
-        ctx.fillRect(colX, GROUND_Y - P, P, P);
+        ctx.fillRect(colX, poolGY - P, P, P);
       }
     }
 
@@ -3085,7 +4027,7 @@ function drawLavaPools() {
       const depth = poolDepthAt(hCol, totalCols, taperCols, maxDepth);
       if (depth < 2) continue;
       const hx = lx + hCol * P;
-      const hy = GROUND_Y + ((i * 7 + Math.floor(frameCount * 0.06)) % depth) * P;
+      const hy = poolGY + ((i * 7 + Math.floor(frameCount * 0.06)) % depth) * P;
       ctx.fillStyle = (i + Math.floor(frameCount * 0.05)) % 3 === 0 ? '#ffee66' : '#ffaa00';
       ctx.fillRect(hx, hy, P, P);
     }
@@ -3096,24 +4038,24 @@ function drawLavaPools() {
     for (let col = 0; col < totalCols; col++) {
       const colX = lx + col * P;
       const depth = poolDepthAt(col, totalCols, taperCols, maxDepth);
-      ctx.fillRect(colX, GROUND_Y + depth * P, P, P);
+      ctx.fillRect(colX, poolGY + depth * P, P, P);
     }
     // Left edge
     for (let row = 0; row < poolDepthAt(0, totalCols, taperCols, maxDepth); row++) {
-      ctx.fillRect(lx, GROUND_Y + row * P, P, P);
+      ctx.fillRect(lx, poolGY + row * P, P, P);
     }
     // Right edge
     for (let row = 0; row < poolDepthAt(totalCols - 1, totalCols, taperCols, maxDepth); row++) {
-      ctx.fillRect(lx + (totalCols - 1) * P, GROUND_Y + row * P, P, P);
+      ctx.fillRect(lx + (totalCols - 1) * P, poolGY + row * P, P, P);
     }
     // Stepped side outlines on taper transitions
     for (let col = 1; col < taperCols; col++) {
       const d1 = poolDepthAt(col - 1, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col, totalCols, taperCols, maxDepth);
-      if (d2 > d1) ctx.fillRect(lx + col * P, GROUND_Y + d1 * P, P, (d2 - d1) * P);
+      if (d2 > d1) ctx.fillRect(lx + col * P, poolGY + d1 * P, P, (d2 - d1) * P);
     }
     for (let col = totalCols - taperCols; col < totalCols - 1; col++) {
       const d1 = poolDepthAt(col, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col + 1, totalCols, taperCols, maxDepth);
-      if (d1 > d2) ctx.fillRect(lx + col * P, GROUND_Y + d2 * P, P, (d1 - d2) * P);
+      if (d1 > d2) ctx.fillRect(lx + col * P, poolGY + d2 * P, P, (d1 - d2) * P);
     }
 
     // ── Ember particles (square pixels rising) ──
@@ -3123,7 +4065,7 @@ function drawLavaPools() {
       const emX = lx + emCol * P;
       particles.push({
         x: emX,
-        y: GROUND_Y - P * 2,
+        y: poolGY - P * 2,
         vx: (Math.random() - 0.5) * 0.5,
         vy: -(1 + Math.random() * 2),
         life: 20 + Math.random() * 20,
@@ -3568,6 +4510,143 @@ function drawStreetLamps() {
   }
 }
 
+// Shared tree drawing constants — recomputed each frame by drawTrees or drawSingleTree
+let _treeSlopeAngle = 0;
+let _treeLgSrcX = 0, _treeLgSrcY = 0, _treeLgSrcW = 0, _treeLgSrcH = 0;
+let _treeSmSrcX = 0, _treeSmSrcY = 0, _treeSmSrcW = 0, _treeSmSrcH = 0;
+let _treeConstsReady = false;
+
+function _updateTreeConsts() {
+  const lgInset = 0.15;
+  _treeLgSrcX = Math.floor(treeImg.width  * lgInset);
+  _treeLgSrcY = Math.floor(treeImg.height * lgInset);
+  _treeLgSrcW = Math.floor(treeImg.width  * (1 - lgInset * 2));
+  _treeLgSrcH = Math.floor(treeImg.height * (1 - lgInset * 2));
+  const smInset = 0.12;
+  _treeSmSrcX = Math.floor(smallTreeImg.width  * smInset);
+  _treeSmSrcY = Math.floor(smallTreeImg.height * smInset);
+  _treeSmSrcW = Math.floor(smallTreeImg.width  * (1 - smInset * 2));
+  _treeSmSrcH = Math.floor(smallTreeImg.height * (1 - smInset * 2));
+  const progress = Math.min(1, levelTimer / levelDuration);
+  const slope = 0.22 + progress * 0.10;
+  _treeSlopeAngle = Math.atan(slope);
+  _treeConstsReady = true;
+}
+
+function drawSingleTree(t) {
+  if (t.collapsed) return;
+  if (!_treeConstsReady) _updateTreeConsts();
+  const P = 4;
+  const sx = t.worldX - scrollOffset;
+  const baseY = getGroundY(t.worldX);
+
+  const isSmall = t.size === 'small';
+  const img   = isSmall ? smallTreeImg   : treeImg;
+  const ready = isSmall ? smallTreeImgReady : treeImgReady;
+  const cSrcX = isSmall ? _treeSmSrcX : _treeLgSrcX;
+  const cSrcY = isSmall ? _treeSmSrcY : _treeLgSrcY;
+  const cSrcW = isSmall ? _treeSmSrcW : _treeLgSrcW;
+  const cSrcH = isSmall ? _treeSmSrcH : _treeLgSrcH;
+
+  const totalH = t.height + t.canopyH;
+  const aspect = cSrcW / cSrcH;
+  // Layer-specific scale: back trees smaller, front trees larger
+  const layerScale = t.layer === 'back' ? 0.75 : t.layer === 'front' ? 1.15 : 1.0;
+  const drawH = totalH * layerScale;
+  const drawW = drawH * aspect;
+
+  const burnProg = t.burning ? Math.min(t.burnTimer / 210, 1) : 0;
+  const groundSink = (isSmall ? drawH * 0.18 : drawH * 0.12) + (t.sinkExtra || 0);
+
+  // Layer-specific opacity
+  const layerAlpha = t.layer === 'back' ? 0.6 : t.layer === 'front' ? 0.9 : 1.0;
+
+  if (ready) {
+    ctx.save();
+    ctx.globalAlpha = layerAlpha;
+    ctx.translate(sx, baseY + groundSink);
+    ctx.rotate(-_treeSlopeAngle);
+    if (t.flipped) ctx.scale(-1, 1);
+    ctx.imageSmoothingEnabled = false;
+
+    if (t.layer === 'back') {
+      // Back trees are black silhouettes — draw tree then overlay black
+      const offW = Math.ceil(drawW) + 4;
+      const offH = Math.ceil(drawH) + 4;
+      const offCvs = document.createElement('canvas');
+      offCvs.width = offW;
+      offCvs.height = offH;
+      const offCtx = offCvs.getContext('2d');
+      offCtx.imageSmoothingEnabled = false;
+      offCtx.drawImage(img, cSrcX, cSrcY, cSrcW, cSrcH, 2, 2, drawW, drawH);
+      offCtx.globalCompositeOperation = 'source-atop';
+      offCtx.fillStyle = '#0a0a0a';
+      offCtx.fillRect(0, 0, offW, offH);
+      offCtx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(offCvs, -drawW / 2 - 2, -drawH - 2);
+    } else if (burnProg > 0) {
+      ctx.globalAlpha = layerAlpha * (1 - burnProg * 0.3);
+      const offW = Math.ceil(drawW) + 4;
+      const offH = Math.ceil(drawH) + 4;
+      const offCvs = document.createElement('canvas');
+      offCvs.width = offW;
+      offCvs.height = offH;
+      const offCtx = offCvs.getContext('2d');
+      offCtx.imageSmoothingEnabled = false;
+      offCtx.drawImage(img, cSrcX, cSrcY, cSrcW, cSrcH, 2, 2, drawW, drawH);
+      offCtx.globalCompositeOperation = 'source-atop';
+      const tintR = Math.floor(180 + burnProg * 75);
+      const tintG = Math.floor(80 - burnProg * 60);
+      offCtx.fillStyle = `rgba(${tintR},${tintG},10,${burnProg * 0.5})`;
+      offCtx.fillRect(0, 0, offW, offH);
+      if (burnProg > 0.8 && frameCount % 6 < 3) {
+        offCtx.fillStyle = 'rgba(255,200,50,0.4)';
+        offCtx.fillRect(0, 0, offW, offH);
+      }
+      offCtx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(offCvs, -drawW / 2 - 2, -drawH - 2);
+    } else {
+      ctx.drawImage(img, cSrcX, cSrcY, cSrcW, cSrcH,
+                    -drawW / 2, -drawH, drawW, drawH);
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+  } else {
+    ctx.save();
+    ctx.translate(sx, baseY + groundSink);
+    ctx.rotate(-_treeSlopeAngle);
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(-t.trunkW / 2, -t.height, t.trunkW, t.height);
+    ctx.restore();
+  }
+
+  if (t.burning) {
+    const numFlames = Math.min(Math.floor(burnProg * 8) + 2, 8);
+    for (let i = 0; i < numFlames; i++) {
+      const fx = sx + (Math.random() - 0.5) * drawW * 0.7;
+      const fy = (baseY - drawH * 0.2) + (Math.random() - 0.5) * drawH * 0.5;
+      const fs = P + Math.random() * P;
+      const fireColors = ['#ff4400', '#ff6600', '#ff8800', '#ffaa00', '#ffcc00'];
+      ctx.fillStyle = fireColors[Math.random() * fireColors.length | 0];
+      ctx.globalAlpha = 0.6 + Math.random() * 0.4;
+      ctx.fillRect(fx - fs / 2, fy - fs - Math.random() * 8, fs, fs);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawTrees() {
+  _updateTreeConsts();
+  for (const t of trees) {
+    if (t.collapsed) continue;
+    const sx = t.worldX - scrollOffset;
+    if (sx < -150 || sx > W + 150) continue;
+    drawSingleTree(t);
+  }
+}
+
 // ── VILLAGE SCENE (end of level 3) ──
 function drawVillage() {
   if (villageProgress <= 0) return;
@@ -3956,9 +5035,10 @@ function drawPlayer() {
       rotation = Math.sin(walkPhase) * 0.05;
     }
 
+    const ds = player.depthScale || 1;
     ctx.translate(cx, player.y + player.h + bobY);
     ctx.rotate(rotation);
-    ctx.scale(scaleX * scaleXAnim, scaleYAnim);
+    ctx.scale(scaleX * scaleXAnim * ds, scaleYAnim * ds);
 
     // Draw sprite centered at bottom
     ctx.drawImage(ninjaSprite, -SPRITE_W / 2, -SPRITE_H, SPRITE_W, SPRITE_H);
@@ -4007,9 +5087,10 @@ function drawPlayer() {
     // Shadow on ground
     ctx.globalAlpha = 0.3;
     ctx.fillStyle = '#000';
-    const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (GROUND_Y - (player.y + player.h)) / 200);
+    const shadowGroundY = level === 4 ? getGroundY(player.x + scrollOffset) : GROUND_Y;
+    const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (shadowGroundY - (player.y + player.h)) / 200);
     ctx.beginPath();
-    ctx.ellipse(cx, GROUND_Y + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, shadowGroundY + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   } else {
@@ -5017,7 +6098,8 @@ function drawTransition() {
   ctx.shadowColor = '#33ccff';
   ctx.shadowBlur = 20;
   ctx.font = `bold 20px ${GAME_FONT}`;
-  ctx.fillText(`LEVEL 1-${level}`, W / 2, H / 2 - 20);
+  const levelDisplay = level <= 3 ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
+  ctx.fillText(levelDisplay, W / 2, H / 2 - 20);
   ctx.shadowBlur = 0;
 
   // Location name
@@ -5078,8 +6160,160 @@ function drawHelpOverlay() {
   ctx.fillText('Press any key to close', W / 2, H - 30);
 }
 
+function drawSingleRock(r) {
+  const P = 4;
+  const sx = r.worldX - scrollOffset;
+  const baseY = getGroundY(r.worldX);
+  const rad = r.radius;
+  const cx = Math.floor(sx / P) * P;
+  const cy = Math.floor((baseY - rad + rad * 0.1 + (r.bounceY || 0)) / P) * P;
+  const seed = (((r.originX || r.worldX) * 2654435761) >>> 0);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(r.rotation);
+
+  const gridRad = Math.ceil(rad / P);
+  for (let gy = -gridRad; gy <= gridRad; gy++) {
+    for (let gx = -gridRad; gx <= gridRad; gx++) {
+      const dist = Math.sqrt(gx * gx + gy * gy);
+      if (dist > gridRad) continue;
+      const px = gx * P;
+      const py = gy * P;
+      const distNorm = dist / gridRad;
+      const ph = ((gx * 7919 + gy * 4813 + seed) >>> 0) & 0xFFFF;
+
+      let color;
+      if (distNorm > 0.85) color = '#1a1210';
+      else if (distNorm > 0.65) color = (ph & 1) ? '#2a1e18' : '#241a14';
+      else if (distNorm > 0.4) color = (ph & 1) ? '#3a2a20' : '#342418';
+      else color = (ph & 1) ? '#443022' : '#3e2c1e';
+
+      let isLavaCrack = false;
+      const angle = Math.atan2(gy, gx);
+      const crackCount = 3 + (seed % 3);
+      for (let c = 0; c < crackCount; c++) {
+        const crackAngle = ((seed >> (c * 4)) & 15) / 15 * Math.PI * 2;
+        const angleDiff = Math.abs(((angle - crackAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (angleDiff < 0.12 + (ph % 3) * 0.02 && distNorm > 0.15 && distNorm < 0.9) { isLavaCrack = true; break; }
+        const branchAngle = crackAngle + 0.5 + c * 0.3;
+        const bDiff = Math.abs(((angle - branchAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (bDiff < 0.08 && distNorm > 0.3 && distNorm < 0.65) { isLavaCrack = true; break; }
+      }
+
+      if (isLavaCrack) {
+        const pulse = (((r.originX || r.worldX) * 7 | 0) + gx + gy) & 1;
+        color = pulse ? '#ff6600' : '#cc4400';
+        if ((ph & 7) < 2) color = pulse ? '#ffaa22' : '#ff6600';
+      }
+      if (!isLavaCrack && (ph & 31) < 3) color = distNorm > 0.5 ? '#140e0a' : '#4a3628';
+
+      ctx.fillStyle = color;
+      ctx.fillRect(px, py, P, P);
+    }
+  }
+
+  const hlOff = Math.floor(gridRad * 0.3);
+  for (let hy = -hlOff - 1; hy <= -hlOff + 1; hy++) {
+    for (let hx = -hlOff - 1; hx <= -hlOff + 1; hx++) {
+      const hd = Math.sqrt(hx * hx + hy * hy);
+      if (hd > 2 || hd > gridRad * 0.7) continue;
+      ctx.fillStyle = 'rgba(80, 65, 50, 0.35)';
+      ctx.fillRect(hx * P, hy * P, P, P);
+    }
+  }
+  ctx.restore();
+
+}
+
+function drawRocks() {
+  for (const r of rocks) {
+    const sx = r.worldX - scrollOffset;
+    if (sx < -50 || sx > W + 50) continue;
+    drawSingleRock(r);
+  }
+}
+
+function drawSingleMoltenRock(mr) {
+  const P = 4;
+  const sx = mr.worldX - scrollOffset;
+  const baseY = getGroundY(mr.worldX);
+  const rad = mr.radius;
+  const cx = Math.floor(sx / P) * P;
+  const cy = Math.floor((baseY - rad + rad * 0.1 + (mr.bounceY || 0)) / P) * P;
+  const seed = (((mr.originX || mr.worldX) * 2654435761) >>> 0);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(mr.rotation);
+
+  const gridRad = Math.ceil(rad / P);
+  for (let gy = -gridRad; gy <= gridRad; gy++) {
+    for (let gx = -gridRad; gx <= gridRad; gx++) {
+      const dist = Math.sqrt(gx * gx + gy * gy);
+      if (dist > gridRad) continue;
+      const px = gx * P;
+      const py = gy * P;
+      const distNorm = dist / gridRad;
+      const ph = ((gx * 7919 + gy * 4813 + seed) >>> 0) & 0xFFFF;
+
+      // INVERTED: lava is the base, rock is the cracks
+      let color;
+      if (distNorm > 0.85) color = '#661100'; // dark molten rim
+      else if (distNorm > 0.65) color = (ph & 1) ? '#cc4400' : '#aa3300';
+      else if (distNorm > 0.4) color = (ph & 1) ? '#ff6600' : '#dd5500';
+      else color = (ph & 1) ? '#ffaa22' : '#ff8811'; // hot bright core
+
+      let isCrack = false;
+      const angle = Math.atan2(gy, gx);
+      const crackCount = 3 + (seed % 3);
+      for (let c = 0; c < crackCount; c++) {
+        const crackAngle = ((seed >> (c * 4)) & 15) / 15 * Math.PI * 2;
+        const angleDiff = Math.abs(((angle - crackAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (angleDiff < 0.12 + (ph % 3) * 0.02 && distNorm > 0.15 && distNorm < 0.9) { isCrack = true; break; }
+        const branchAngle = crackAngle + 0.5 + c * 0.3;
+        const bDiff = Math.abs(((angle - branchAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (bDiff < 0.08 && distNorm > 0.3 && distNorm < 0.65) { isCrack = true; break; }
+      }
+
+      // Cracks are dark rock instead of lava
+      if (isCrack) {
+        const pulse = ((seed * 7 | 0) + gx + gy) & 1;
+        color = pulse ? '#2a1e18' : '#1a1210';
+        if ((ph & 7) < 2) color = pulse ? '#3a2a20' : '#241a14';
+      }
+      if (!isCrack && (ph & 31) < 3) color = distNorm > 0.5 ? '#551100' : '#ffcc44'; // speckle
+
+      ctx.fillStyle = color;
+      ctx.fillRect(px, py, P, P);
+    }
+  }
+
+  // Hot highlight — top-left glow
+  const hlOff = Math.floor(gridRad * 0.3);
+  for (let hy = -hlOff - 1; hy <= -hlOff + 1; hy++) {
+    for (let hx = -hlOff - 1; hx <= -hlOff + 1; hx++) {
+      const hd = Math.sqrt(hx * hx + hy * hy);
+      if (hd > 2 || hd > gridRad * 0.7) continue;
+      ctx.fillStyle = 'rgba(255, 220, 100, 0.35)';
+      ctx.fillRect(hx * P, hy * P, P, P);
+    }
+  }
+  ctx.restore();
+
+}
+
+function drawMoltenRocks() {
+  for (const mr of moltenRocks) {
+    const sx = mr.worldX - scrollOffset;
+    if (sx < -50 || sx > W + 50) continue;
+    drawSingleMoltenRock(mr);
+  }
+}
+
 // ── MAIN DRAW ──
 function draw() {
+  ctx.clearRect(0, 0, W, H);
   ctx.save();
 
   if (shakeTimer > 0) {
@@ -5099,14 +6333,69 @@ function draw() {
   } else if (gameState === 'dojo') {
     drawDojo();
   } else {
-    // Draw city normally — no fading
-    drawNeoTokyoSky();
-    drawBuildingLayer(buildings_far, 0.1, 0);
-    drawBuildingLayer(buildings_mid, 0.3, 0.3);
-    drawNeonSigns();
-    drawBuildingLayer(buildings_near, 0.5, 0.1);
-    drawStreet();
-    drawStreetLamps();
+    // Draw city background — destroyed ruins for level 4, neon city otherwise
+    if (level === 4) {
+      drawDestroyedCitySky();
+      if (!level2BgReady) {
+        drawRuinsLayer(ruins_far, 0.1, 0, false);
+        drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
+      }
+      drawMidgroundForest();
+      drawBurningVillage();
+      drawRuinsLayer(ruins_near, 0.8, 0.1, true);
+    } else {
+      drawNeoTokyoSky();
+      drawBuildingLayer(buildings_far, 0.1, 0);
+      drawBuildingLayer(buildings_mid, 0.3, 0.3);
+      drawNeonSigns();
+      drawBuildingLayer(buildings_near, 0.5, 0.1);
+    }
+    let playerDrawnInDepth = false;
+    if (level === 4) {
+      // ── LAYER 1: BACK TREES (behind ground + player) ──
+      _updateTreeConsts();
+      for (const t of trees) {
+        if (t.layer !== 'back') continue;
+        const sx = t.worldX - scrollOffset;
+        if (sx < -200 || sx > W + 200) continue;
+        drawSingleTree(t);
+      }
+      drawVolcanicGround();
+    } else {
+      drawStreet();
+    }
+    if (level === 4) {
+      // ── LAYER 2: GROUND LAYER — mid trees, rocks, player ──
+      // Draw mid trees + rocks + player together
+      for (const t of trees) {
+        if (t.layer !== 'mid') continue;
+        const sx = t.worldX - scrollOffset;
+        if (sx < -200 || sx > W + 200) continue;
+        drawSingleTree(t);
+      }
+      for (const r of rocks) {
+        const sx = r.worldX - scrollOffset;
+        if (sx < -50 || sx > W + 50) continue;
+        drawSingleRock(r);
+      }
+      for (const mr of moltenRocks) {
+        const sx = mr.worldX - scrollOffset;
+        if (sx < -50 || sx > W + 50) continue;
+        drawSingleMoltenRock(mr);
+      }
+      drawPlayer();
+      playerDrawnInDepth = true;
+
+      // ── LAYER 3: FRONT TREES (in front of player) ──
+      for (const t of trees) {
+        if (t.layer !== 'front') continue;
+        const sx = t.worldX - scrollOffset;
+        if (sx < -200 || sx > W + 200) continue;
+        drawSingleTree(t);
+      }
+    } else {
+      drawStreetLamps();
+    }
 
     // Shadow overlay — everything falls into darkness near end of level 3
     if (villageProgress > 0) {
@@ -5122,7 +6411,7 @@ function draw() {
     drawLavaDrops();
     drawExplosions();
     drawVehicleDebris();
-    drawPlayer();
+    if (!playerDrawnInDepth) drawPlayer();
 
     // Particles — use fillRect instead of arc for performance
     for (let i = 0; i < particles.length; i++) {
