@@ -53,6 +53,24 @@ const MAX_PARTICLES = 150;
 const GRAVITY = 0.55;
 const JUMP_FORCE = -11.5;
 const GROUND_Y = H - 60; // street level
+
+function getGroundY(worldX) {
+  if (level !== 4) return GROUND_Y;
+  // Level 4 (2-1): ground slopes upward the entire time.
+  // The slope is relative to the current screen so it looks consistent
+  // throughout the level — the camera "climbs" with the player.
+  const progress = Math.min(1, levelTimer / levelDuration); // 0→1 over the level
+  const slope = 0.22 + progress * 0.10; // rise/run ratio (~12°→18°, steepens over time)
+
+  // screenX: position on screen (0 = left edge, W = right edge)
+  const screenX = worldX - scrollOffset;
+  // Player is at ~150px on screen. Ground at player stays at GROUND_Y.
+  // Ground to the right of the player is higher (lower Y), left is lower (higher Y).
+  const playerScreenX = 150;
+  const rise = (screenX - playerScreenX) * slope;
+  return GROUND_Y - rise;
+}
+
 const PLAYER_SPEED = 4.5;
 const RUN_SPEED = 2.5; // world scroll speed
 
@@ -619,6 +637,55 @@ let lavaPools = [];    // on the ground
 let particles = [];
 let warningMarkers = []; // where drops will land
 
+// ── ROLLING ROCKS (Level 4) ──
+let rocks = [];
+
+function spawnRock() {
+  const sizeRoll = Math.random();
+  let size, radius, speed;
+  if (sizeRoll < 0.4) {
+    size = 'small'; radius = 12; speed = 7 + Math.random() * 2;
+  } else if (sizeRoll < 0.75) {
+    size = 'medium'; radius = 22; speed = 5 + Math.random() * 2;
+  } else {
+    size = 'large'; radius = 35; speed = 3 + Math.random() * 2;
+  }
+  const knockback = { small: 30, medium: 50, large: 80 };
+  rocks.push({
+    worldX: scrollOffset + W + 50,
+    radius: radius,
+    speed: speed,
+    size: size,
+    knockback: knockback[size],
+    rotation: 0,
+    rotationSpeed: speed / radius
+  });
+}
+
+// ── MOLTEN ROCKS (Level 4) ──
+let moltenRocks = [];
+
+function spawnMoltenRock() {
+  const sizeRoll = Math.random();
+  let radius, speed;
+  // Molten rocks move slower than regular rocks — they're heavier and glow
+  if (sizeRoll < 0.4) {
+    radius = 14; speed = 3.5 + Math.random() * 1.5;
+  } else if (sizeRoll < 0.75) {
+    radius = 24; speed = 2.5 + Math.random() * 1.5;
+  } else {
+    radius = 38; speed = 1.5 + Math.random() * 1;
+  }
+  moltenRocks.push({
+    worldX: scrollOffset + W + 50,
+    radius: radius,
+    speed: speed,
+    rotation: 0,
+    rotationSpeed: speed / radius,
+    glowPhase: Math.random() * Math.PI * 2
+  });
+}
+
 // ── EMERGENCY VEHICLES ──
 let vehicles = [];
 
@@ -685,6 +752,29 @@ function generateBuildings() {
   }
 }
 
+// ── DESTROYED CITY RUINS (Level 4 background) ──
+let ruins_far = [];
+let ruins_mid = [];
+let ruins_near = [];
+
+function generateRuins() {
+  ruins_far = [];
+  ruins_mid = [];
+  ruins_near = [];
+  // Far ruins — jagged silhouettes
+  for (let x = 0; x < W + 600; x += 40 + Math.random() * 30) {
+    ruins_far.push({ x, w: 30 + Math.random() * 25, h: 40 + Math.random() * 80, jagged: Math.random() < 0.6 });
+  }
+  // Mid ruins — crumbled with glow
+  for (let x = 0; x < W + 600; x += 50 + Math.random() * 40) {
+    ruins_mid.push({ x, w: 35 + Math.random() * 30, h: 30 + Math.random() * 60, hasGlow: Math.random() < 0.3, glowPhase: Math.random() * Math.PI * 2 });
+  }
+  // Near ruins — rubble
+  for (let x = 0; x < W + 600; x += 60 + Math.random() * 50) {
+    ruins_near.push({ x, w: 25 + Math.random() * 35, h: 20 + Math.random() * 40 });
+  }
+}
+
 function randomDarkColor() {
   const r = 15 + Math.random() * 25;
   const g = 15 + Math.random() * 30;
@@ -728,6 +818,40 @@ function generateStreetLamps() {
   }
 }
 
+// ── TREES (world coords, jumpable platforms for level 4) ──
+let trees = [];
+const TREE_SPACING = 200;
+
+function generateTrees() {
+  trees = [];
+  let lastWasTall = false;
+  for (let wx = 150; wx < 10000; wx += TREE_SPACING + Math.random() * 60) {
+    let sizeRoll = Math.random();
+    let size;
+    if (lastWasTall) {
+      size = sizeRoll < 0.4 ? 'small' : 'medium';
+    } else {
+      size = sizeRoll < 0.3 ? 'small' : sizeRoll < 0.8 ? 'medium' : 'tall';
+    }
+    lastWasTall = (size === 'tall');
+    const heights = { small: 80, medium: 135, tall: 180 };
+    const canopyWidths = { small: 40, medium: 55, tall: 65 };
+    const canopyHeights = { small: 20, medium: 28, tall: 35 };
+    const trunkWidths = { small: 8, medium: 12, tall: 16 };
+    trees.push({
+      worldX: wx,
+      size: size,
+      height: heights[size],
+      canopyW: canopyWidths[size],
+      canopyH: canopyHeights[size],
+      trunkW: trunkWidths[size],
+      burning: false,
+      burnTimer: 0,
+      collapsed: false
+    });
+  }
+}
+
 // ── LAVA DROP SPAWNING ──
 // All lava objects use WORLD coordinates (worldX).
 // Screen position = worldX - scrollOffset
@@ -758,7 +882,7 @@ function spawnLavaDrop() {
   }, 800);
 }
 
-function spawnLavaPool(worldX) {
+function spawnLavaPool(worldX, small) {
   // Check if there's already a pool nearby - merge
   for (const pool of lavaPools) {
     if (Math.abs(pool.worldX - worldX) < pool.w * 0.6) {
@@ -768,12 +892,15 @@ function spawnLavaPool(worldX) {
       return;
     }
   }
+  const poolW = small ? 20 + Math.random() * 15 : 40 + Math.random() * 30;
+  const poolLife = small ? 200 + Math.random() * 100 : 400 + Math.random() * 200;
+  const poolMaxLife = small ? 300 : 600;
   lavaPools.push({
     worldX: worldX,
-    w: 40 + Math.random() * 30,
+    w: poolW,
     h: 8,
-    life: 400 + Math.random() * 200,
-    maxLife: 600,
+    life: poolLife,
+    maxLife: poolMaxLife,
     intensity: 0.8,
     waveOffset: Math.random() * 6.28
   });
@@ -1085,7 +1212,7 @@ window.addEventListener('keydown', e => {
   // Konami code detection — enter code, then press 1/2/3 to jump to level
   if (konamiActive) {
     // Waiting for level number after code was entered
-    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : 0;
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : 0;
     if (levelNum > 0) {
       konamiActive = false;
       konamiUsed = true;
@@ -1327,6 +1454,8 @@ function clearGameState() {
   particles = [];
   warningMarkers = [];
   vehicles = [];
+  rocks = [];
+  moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
   shakeTimer = 0;
@@ -1353,7 +1482,7 @@ function clearGameState() {
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
-    level = Math.min(level + 1, 3);
+    level = Math.min(level + 1, 4);
     levelDuration = 1800 + level * 300;
   } else {
     level = 1;
@@ -1397,7 +1526,7 @@ function startGame() {
   deathTimer = 0;
   villageProgress = 0;
   player.x = 150;
-  player.y = GROUND_Y - SPRITE_H;
+  player.y = getGroundY(150 + scrollOffset) - SPRITE_H;
   player.vy = 0;
   player.vx = 0;
   player.grounded = true;
@@ -1418,10 +1547,18 @@ function startGame() {
   particles = [];
   warningMarkers = [];
   vehicles = [];
+  rocks = [];
+  moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
   generateBuildings();
-  generateStreetLamps();
+  if (level < 4) {
+    generateStreetLamps();
+  }
+  if (level === 4) {
+    generateTrees();
+    generateRuins();
+  }
 }
 
 function respawnPlayer() {
@@ -1429,7 +1566,7 @@ function respawnPlayer() {
   gameState = 'playing';
   deathTimer = 0;
   player.x = 150;
-  player.y = GROUND_Y - SPRITE_H;
+  player.y = getGroundY(150 + scrollOffset) - SPRITE_H;
   player.vy = 0;
   player.vx = 0;
   player.grounded = true;
@@ -1479,7 +1616,7 @@ function update() {
   // Level complete?
   if (levelTimer >= levelDuration) {
     if (!konamiUsed) score += level * 1000;
-    if (level >= 3) {
+    if (level >= 4) {
       // Stop all gameplay audio
       levelMusic.pause();
       levelMusic.currentTime = 0;
@@ -1510,7 +1647,9 @@ function update() {
 
   // Spawn lava drops - rate increases with level and time
   // Taper off during village transition (lava stops near the village)
-  const dropRate = Math.max(15, 60 - level * 8 - levelTimer * 0.005);
+  const dropRate = level === 4
+    ? Math.max(20, 40 - levelTimer * 0.007)
+    : Math.max(15, 60 - level * 8 - levelTimer * 0.005);
   const lavaChance = villageProgress > 0.5 ? Math.max(0, 1 - (villageProgress - 0.5) * 2) : 1;
   if (frameCount % Math.floor(dropRate) === 0 && Math.random() < lavaChance) {
     spawnLavaDrop();
@@ -1621,26 +1760,54 @@ function update() {
   }
 
   // Street lamp platform collision (check before ground so lamps take priority)
-  for (const lamp of streetLamps) {
-    const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
-    const platLeft = lsx - lamp.lampW / 2;
-    const platRight = lsx + lamp.lampW / 2;
-    const platTop = GROUND_Y - lamp.poleH - lamp.lampH;
-    const platBot = GROUND_Y - lamp.poleH;
+  if (level < 4) {
+    for (const lamp of streetLamps) {
+      const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
+      const platLeft = lsx - lamp.lampW / 2;
+      const platRight = lsx + lamp.lampW / 2;
+      const platTop = GROUND_Y - lamp.poleH - lamp.lampH;
+      const platBot = GROUND_Y - lamp.poleH;
 
-    // Player is above the platform and falling onto it
-    if (
-      player.vy >= 0 &&
-      player.x + player.w > platLeft &&
-      player.x < platRight &&
-      player.y + player.h >= platTop &&
-      player.y + player.h <= platBot + player.vy + 4
-    ) {
-      player.y = platTop - player.h;
-      player.vy = 0;
-      player.grounded = true;
-      player.jumping = false;
-      player.doubleJumped = false;
+      // Player is above the platform and falling onto it
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > platLeft &&
+        player.x < platRight &&
+        player.y + player.h >= platTop &&
+        player.y + player.h <= platBot + player.vy + 4
+      ) {
+        player.y = platTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+      }
+    }
+  }
+
+  // Tree platform collision (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.collapsed) continue;
+      const tsx = t.worldX - scrollOffset;
+      if (tsx < -100 || tsx > W + 100) continue;
+      const baseY = getGroundY(t.worldX);
+      const platTop = baseY - t.height - t.canopyH;
+      const platBot = baseY - t.height;
+      const halfW = t.canopyW / 2;
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > tsx - halfW &&
+        player.x < tsx + halfW &&
+        player.y + player.h >= platTop &&
+        player.y + player.h <= platBot + player.vy + 4
+      ) {
+        player.y = platTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+      }
     }
   }
 
@@ -1730,8 +1897,9 @@ function update() {
   }
 
   // Ground collision
-  if (player.y + player.h >= GROUND_Y) {
-    player.y = GROUND_Y - player.h;
+  const playerGroundY = getGroundY(player.x + scrollOffset);
+  if (player.y + player.h >= playerGroundY) {
+    player.y = playerGroundY - player.h;
     player.vy = 0;
     player.grounded = true;
     player.jumping = false;
@@ -1760,9 +1928,10 @@ function update() {
     const screenX = d.worldX - scrollOffset;
 
     // Hit ground
-    if (d.y >= GROUND_Y - 4) {
-      spawnParticles(screenX, GROUND_Y, '#ff4400', 8, 4);
-      spawnParticles(screenX, GROUND_Y, '#ffaa00', 5, 3);
+    const dropGroundY = getGroundY(d.worldX);
+    if (d.y >= dropGroundY - 4) {
+      spawnParticles(screenX, dropGroundY, '#ff4400', 8, 4);
+      spawnParticles(screenX, dropGroundY, '#ffaa00', 5, 3);
       spawnLavaPool(d.worldX);
       playLavaHit();
       lavaDrops.splice(i, 1);
@@ -1808,6 +1977,138 @@ function update() {
     }
   }
 
+  // Lava-tree contact detection (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.burning || t.collapsed) continue;
+      const tsx = t.worldX - scrollOffset;
+      const baseY = getGroundY(t.worldX);
+      const treeTop = baseY - t.height - t.canopyH;
+      // Check lava drops
+      for (const d of lavaDrops) {
+        const dsx = d.worldX - scrollOffset;
+        if (Math.abs(dsx - tsx) < t.canopyW / 2 + 10 && d.y >= treeTop && d.y <= baseY) {
+          t.burning = true;
+          break;
+        }
+      }
+      // Check lava pools under the tree
+      if (!t.burning) {
+        for (const p of lavaPools) {
+          const psx = p.worldX - scrollOffset;
+          if (Math.abs(psx - tsx) < (p.w / 2 + t.trunkW / 2)) {
+            t.burning = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Burn timer update (level 4)
+  if (level === 4) {
+    for (const t of trees) {
+      if (t.burning && !t.collapsed) {
+        t.burnTimer++;
+        if (t.burnTimer >= 210) {
+          t.collapsed = true;
+          // Ember particles
+          const tsx = t.worldX - scrollOffset;
+          const baseY = getGroundY(t.worldX);
+          for (let i = 0; i < 8; i++) {
+            particles.push({
+              x: tsx + (Math.random() - 0.5) * t.canopyW,
+              y: baseY - t.height - Math.random() * t.canopyH,
+              vx: (Math.random() - 0.5) * 2,
+              vy: -1 - Math.random() * 2,
+              life: 60 + Math.random() * 40,
+              maxLife: 100,
+              color: `rgb(255, ${100 + Math.random() * 100 | 0}, 0)`
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Rolling rocks (level 4)
+  if (level === 4) {
+    const progress = levelTimer / levelDuration;
+    let rockRate;
+    if (progress < 0.33) rockRate = 100;
+    else if (progress < 0.66) rockRate = 70;
+    else rockRate = 50;
+    if (levelTimer % rockRate === 0) spawnRock();
+
+    for (let i = rocks.length - 1; i >= 0; i--) {
+      const r = rocks[i];
+      r.worldX -= r.speed;
+      r.rotation += r.rotationSpeed;
+      // Remove if off screen left
+      if (r.worldX < scrollOffset - 100) {
+        rocks.splice(i, 1);
+        continue;
+      }
+      // Player collision — knockback only, no kill
+      if (!player.invincible) {
+        const sx = r.worldX - scrollOffset;
+        const cy = getGroundY(r.worldX) - r.radius;
+        const px = player.x + player.w / 2;
+        const py = player.y + player.h / 2;
+        const dx = px - sx;
+        const dy = py - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < r.radius + player.w / 3) {
+          player.x -= r.knockback;
+          if (player.x < 0) player.x = 0;
+          player.invincible = 20;
+          shakeTimer = 8;
+          spawnParticles(sx, cy, '#8b7355', 8, 4);
+          rocks.splice(i, 1);
+          continue;
+        }
+      }
+    }
+  }
+
+  // Molten rocks (level 4)
+  if (level === 4) {
+    const progress = levelTimer / levelDuration;
+    let moltenRate;
+    if (progress < 0.33) moltenRate = 200;
+    else if (progress < 0.66) moltenRate = 150;
+    else moltenRate = 100;
+    if ((levelTimer + 50) % moltenRate === 0) spawnMoltenRock();
+
+    for (let i = moltenRocks.length - 1; i >= 0; i--) {
+      const mr = moltenRocks[i];
+      mr.worldX -= mr.speed;
+      mr.rotation += mr.rotationSpeed;
+      mr.glowPhase += 0.1;
+      // Remove if off screen left
+      if (mr.worldX < scrollOffset - 100) {
+        moltenRocks.splice(i, 1);
+        continue;
+      }
+      // Lava trail — 5% chance per frame
+      if (Math.random() < 0.05) {
+        spawnLavaPool(mr.worldX, true);
+      }
+      // Player collision — INSTANT KILL
+      const sx = mr.worldX - scrollOffset;
+      const cy = getGroundY(mr.worldX) - mr.radius;
+      const px = player.x + player.w / 2;
+      const py = player.y + player.h / 2;
+      const dx = px - sx;
+      const dy = py - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < mr.radius + player.w / 3) {
+        die();
+        return;
+      }
+    }
+  }
+
   // Update warning markers (world coords)
   for (let i = warningMarkers.length - 1; i >= 0; i--) {
     warningMarkers[i].life--;
@@ -1827,27 +2128,29 @@ function update() {
   // Update neon sign blinking
   for (let si = 0; si < neonSigns.length; si++) neonSigns[si].blink += neonSigns[si].blinkSpeed;
 
-  // Spawn emergency vehicles:
-  // 0) Level 1: school bus right away — sets the tone
-  // 1) School bus at exactly 1/3 mark
-  // 2) Regular vehicle shortly after
-  // 3) More frequent random spawns in second half, biased from right
-  if (level === 1 && levelTimer === 60) {
-    spawnVehicle('schoolbus');
-  }
-  // Guaranteed ladder truck early in level 2
-  if (level === 2 && levelTimer === 90) {
-    spawnVehicle('firetruck', true);
-  }
-  const thirdMark = Math.floor(levelDuration / 3);
-  if (levelTimer === thirdMark) {
-    spawnVehicle('schoolbus');
-  }
-  if (levelTimer === thirdMark + 60) {
-    spawnVehicle(); // follow-up emergency vehicle
-  }
-  if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
-    spawnVehicle();
+  // Spawn emergency vehicles (no vehicles in level 4 — destroyed wasteland):
+  if (level < 4) {
+    // 0) Level 1: school bus right away — sets the tone
+    // 1) School bus at exactly 1/3 mark
+    // 2) Regular vehicle shortly after
+    // 3) More frequent random spawns in second half, biased from right
+    if (level === 1 && levelTimer === 60) {
+      spawnVehicle('schoolbus');
+    }
+    // Guaranteed ladder truck early in level 2
+    if (level === 2 && levelTimer === 90) {
+      spawnVehicle('firetruck', true);
+    }
+    const thirdMark = Math.floor(levelDuration / 3);
+    if (levelTimer === thirdMark) {
+      spawnVehicle('schoolbus');
+    }
+    if (levelTimer === thirdMark + 60) {
+      spawnVehicle(); // follow-up emergency vehicle
+    }
+    if (levelTimer > levelDuration / 2 && villageProgress < 0.3 && Math.random() < 0.006 + level * 0.0015) {
+      spawnVehicle();
+    }
   }
 
   // Update vehicles + siren audio
@@ -2693,6 +2996,87 @@ function drawDojo() {
 // ── DRAWING ──
 // ══════════════════════════════
 
+// ── DESTROYED CITY SKY (Level 4) ──
+function drawDestroyedCitySky() {
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+  skyGrad.addColorStop(0, '#1a0505');
+  skyGrad.addColorStop(0.4, '#3d1111');
+  skyGrad.addColorStop(1, '#5a1a0a');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, H);
+  // Ash particles
+  for (let i = 0; i < 20; i++) {
+    const hash = (i * 7919 + Math.floor(frameCount * 0.3)) & 0xFFFF;
+    const ax = hash % W;
+    const ay = (hash * 3 + frameCount * 0.5) % H;
+    ctx.fillStyle = `rgba(180, 160, 140, ${0.2 + (hash % 30) / 100})`;
+    ctx.fillRect(ax, ay, 2, 2);
+  }
+}
+
+// ── RUINS LAYER (Level 4 parallax) ──
+function drawRuinsLayer(ruins, parallaxSpeed, brightness, isNear) {
+  const offset = scrollOffset * parallaxSpeed;
+  const baseY = GROUND_Y; // background uses flat baseline
+  for (let i = 0; i < ruins.length; i++) {
+    const r = ruins[i];
+    const sx = ((r.x - offset) % (W + 600) + W + 600) % (W + 600) - 300;
+    if (sx + r.w < -50 || sx > W + 50) continue;
+
+    const bri = Math.floor(brightness * 40);
+    const rb = 30 + bri;
+    const gb = 15 + bri;
+    const bb = 10 + bri;
+    ctx.fillStyle = `rgb(${rb},${gb},${bb})`;
+
+    if (r.jagged) {
+      // Jagged broken roofline
+      ctx.beginPath();
+      ctx.moveTo(sx, baseY);
+      ctx.lineTo(sx, baseY - r.h);
+      // Jagged top edge
+      const jaggedW = r.w;
+      const segments = 3 + (i % 3);
+      for (let j = 1; j <= segments; j++) {
+        const jx = sx + (jaggedW * j / segments);
+        const jy = baseY - r.h + ((j % 2 === 0) ? 8 + (i % 5) * 3 : -4 - (i % 4) * 2);
+        ctx.lineTo(jx, jy);
+      }
+      ctx.lineTo(sx + r.w, baseY - r.h * 0.6);
+      ctx.lineTo(sx + r.w, baseY);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // Simple crumbled rectangle
+      ctx.fillRect(sx, baseY - r.h, r.w, r.h);
+    }
+
+    // Mid buildings with glow: flickering orange windows
+    if (r.hasGlow) {
+      const flicker = 0.3 + 0.4 * Math.sin(frameCount * 0.04 + r.glowPhase);
+      ctx.fillStyle = `rgba(255, 120, 30, ${flicker})`;
+      const winW = 4, winH = 5;
+      for (let wy = baseY - r.h + 8; wy < baseY - 6; wy += 12) {
+        for (let wx = sx + 4; wx < sx + r.w - 6; wx += 10) {
+          if (((wx * 13 + wy * 7) & 7) < 3) {
+            ctx.fillRect(wx, wy, winW, winH);
+          }
+        }
+      }
+    }
+
+    // Near layer: occasional ember particles (drawn inline, no allocation)
+    if (isNear && (i % 3 === 0)) {
+      const et = frameCount * 0.02 + i * 2.3;
+      const ex = sx + r.w * 0.5 + Math.sin(et * 1.3) * 6;
+      const ey = baseY - r.h - 5 - ((frameCount + i * 47) % 30);
+      const ea = 0.4 + 0.3 * Math.sin(et * 2);
+      ctx.fillStyle = `rgba(255, 80, 20, ${ea})`;
+      ctx.fillRect(ex, ey, 2, 2);
+    }
+  }
+}
+
 function drawNeoTokyoSky() {
   // ── VOLCANO IMAGE AS FULL BACKGROUND ──
   if (volcanoReady) {
@@ -3009,6 +3393,65 @@ function drawStreet() {
   }
 }
 
+function drawVolcanicGround() {
+  const so = scrollOffset;
+  const step = 4; // sample every 4px for performance
+
+  // 1. Filled polygon: ground surface down to canvas bottom
+  ctx.beginPath();
+  ctx.moveTo(0, H); // bottom-left
+  for (let sx = 0; sx <= W; sx += step) {
+    ctx.lineTo(sx, getGroundY(sx + so));
+  }
+  ctx.lineTo(W, H); // bottom-right
+  ctx.closePath();
+  ctx.fillStyle = '#3a2515';
+  ctx.fill();
+
+  // 2. Surface line along the top
+  ctx.beginPath();
+  ctx.moveTo(0, getGroundY(so));
+  for (let sx = step; sx <= W; sx += step) {
+    ctx.lineTo(sx, getGroundY(sx + so));
+  }
+  ctx.strokeStyle = '#5a3a28';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // 3. Animated lava vein cracks
+  const veinCount = 10;
+  for (let i = 0; i < veinCount; i++) {
+    const baseX = i * 120 + 30;
+    const sx = ((baseX - so * 0.6) % (W + 200) + W + 200) % (W + 200) - 100;
+    if (sx < -50 || sx > W + 50) continue;
+
+    const gy = getGroundY(sx + so);
+    const pulse = 0.3 + 0.4 * Math.sin(frameCount * 0.03 + i * 1.7);
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = i % 2 === 0 ? '#ff4500' : '#ff6a00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, gy + 6);
+    ctx.lineTo(sx + 10 + (i % 3) * 5, gy + 14 + (i % 4) * 4);
+    ctx.lineTo(sx + 22 + (i % 2) * 8, gy + 20 + (i % 3) * 6);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 4. Smoke wisps rising from the ground
+  for (let i = 0; i < 5; i++) {
+    const hash = ((Math.floor(scrollOffset / 300) + i) * 4391) & 0xFFFF;
+    const wsx = ((hash % W) + W) % W;
+    const wgy = getGroundY(wsx + scrollOffset);
+    const wispY = wgy - 10 - Math.sin(frameCount * 0.02 + i * 1.5) * 15;
+    const walpha = 0.1 + Math.sin(frameCount * 0.015 + i * 2) * 0.05;
+    ctx.fillStyle = `rgba(120, 110, 100, ${walpha})`;
+    ctx.beginPath();
+    ctx.ellipse(wsx, wispY, 8, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // Pool depth helper — hoisted out of per-frame loop to avoid closure allocation
 function poolDepthAt(col, totalCols, taperCols, maxDepth) {
   if (col < taperCols) {
@@ -3031,6 +3474,7 @@ function drawLavaPools() {
     const fadeIn = Math.min(1, (p.maxLife - p.life) / 30);
     const fadeOut = Math.min(1, p.life / 60);
     const alpha = fadeIn * fadeOut * p.intensity;
+    const poolGY = level === 4 ? getGroundY(p.worldX) : GROUND_Y;
 
     // Snap pool to pixel grid
     const lx = Math.round((screenX - p.w / 2) / P) * P;
@@ -3046,7 +3490,7 @@ function drawLavaPools() {
       const gw = pw + g * P * 4;
       const gx = lx - g * P * 2;
       ctx.fillStyle = `rgba(255, ${40 + g * 15}, 0, ${0.08 / g})`;
-      ctx.fillRect(gx, GROUND_Y - g * P, gw, g * P * 2 + P);
+      ctx.fillRect(gx, poolGY - g * P, gw, g * P * 2 + P);
     }
 
     // ── Main pool body (tapered rows of chunky pixels) ──
@@ -3057,7 +3501,7 @@ function drawLavaPools() {
       const colX = lx + col * P;
       const depth = poolDepthAt(col, totalCols, taperCols, maxDepth);
       for (let row = 0; row < depth; row++) {
-        const rowY = GROUND_Y + row * P;
+        const rowY = poolGY + row * P;
         const hash = ((col * 7 + row * 13 + Math.floor(frameCount * 0.08 + p.waveOffset)) & 0xFF);
         const colorIdx = hash % lavaColors.length;
         ctx.fillStyle = lavaColors[colorIdx];
@@ -3071,10 +3515,10 @@ function drawLavaPools() {
       const surfaceAnim = Math.sin((col + frameCount * 0.05 + p.waveOffset) * 0.8);
       if (surfaceAnim > 0.2) {
         ctx.fillStyle = '#ff8800';
-        ctx.fillRect(colX, GROUND_Y - P, P, P);
+        ctx.fillRect(colX, poolGY - P, P, P);
       } else if (surfaceAnim > -0.3) {
         ctx.fillStyle = '#dd4400';
-        ctx.fillRect(colX, GROUND_Y - P, P, P);
+        ctx.fillRect(colX, poolGY - P, P, P);
       }
     }
 
@@ -3085,7 +3529,7 @@ function drawLavaPools() {
       const depth = poolDepthAt(hCol, totalCols, taperCols, maxDepth);
       if (depth < 2) continue;
       const hx = lx + hCol * P;
-      const hy = GROUND_Y + ((i * 7 + Math.floor(frameCount * 0.06)) % depth) * P;
+      const hy = poolGY + ((i * 7 + Math.floor(frameCount * 0.06)) % depth) * P;
       ctx.fillStyle = (i + Math.floor(frameCount * 0.05)) % 3 === 0 ? '#ffee66' : '#ffaa00';
       ctx.fillRect(hx, hy, P, P);
     }
@@ -3096,24 +3540,24 @@ function drawLavaPools() {
     for (let col = 0; col < totalCols; col++) {
       const colX = lx + col * P;
       const depth = poolDepthAt(col, totalCols, taperCols, maxDepth);
-      ctx.fillRect(colX, GROUND_Y + depth * P, P, P);
+      ctx.fillRect(colX, poolGY + depth * P, P, P);
     }
     // Left edge
     for (let row = 0; row < poolDepthAt(0, totalCols, taperCols, maxDepth); row++) {
-      ctx.fillRect(lx, GROUND_Y + row * P, P, P);
+      ctx.fillRect(lx, poolGY + row * P, P, P);
     }
     // Right edge
     for (let row = 0; row < poolDepthAt(totalCols - 1, totalCols, taperCols, maxDepth); row++) {
-      ctx.fillRect(lx + (totalCols - 1) * P, GROUND_Y + row * P, P, P);
+      ctx.fillRect(lx + (totalCols - 1) * P, poolGY + row * P, P, P);
     }
     // Stepped side outlines on taper transitions
     for (let col = 1; col < taperCols; col++) {
       const d1 = poolDepthAt(col - 1, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col, totalCols, taperCols, maxDepth);
-      if (d2 > d1) ctx.fillRect(lx + col * P, GROUND_Y + d1 * P, P, (d2 - d1) * P);
+      if (d2 > d1) ctx.fillRect(lx + col * P, poolGY + d1 * P, P, (d2 - d1) * P);
     }
     for (let col = totalCols - taperCols; col < totalCols - 1; col++) {
       const d1 = poolDepthAt(col, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col + 1, totalCols, taperCols, maxDepth);
-      if (d1 > d2) ctx.fillRect(lx + col * P, GROUND_Y + d2 * P, P, (d1 - d2) * P);
+      if (d1 > d2) ctx.fillRect(lx + col * P, poolGY + d2 * P, P, (d1 - d2) * P);
     }
 
     // ── Ember particles (square pixels rising) ──
@@ -3123,7 +3567,7 @@ function drawLavaPools() {
       const emX = lx + emCol * P;
       particles.push({
         x: emX,
-        y: GROUND_Y - P * 2,
+        y: poolGY - P * 2,
         vx: (Math.random() - 0.5) * 0.5,
         vy: -(1 + Math.random() * 2),
         life: 20 + Math.random() * 20,
@@ -3550,6 +3994,88 @@ function drawStreetLamps() {
     // Subtle top-edge highlight on the arm
     ctx.fillStyle = 'rgba(255, 255, 200, 0.15)';
     ctx.fillRect(sx - armW, armY, lamp.lampW, P);
+  }
+}
+
+function drawTrees() {
+  const P = 4; // pixel grid size
+  for (const t of trees) {
+    if (t.collapsed) continue;
+    const sx = t.worldX - scrollOffset;
+    if (sx < -100 || sx > W + 100) continue;
+
+    const baseY = getGroundY(t.worldX);
+    const trunkTop = baseY - t.height;
+    const canopyCenter = trunkTop - t.canopyH / 2;
+
+    // Burn color progression
+    const burnProg = t.burning ? Math.min(t.burnTimer / 210, 1) : 0;
+
+    // ── Trunk ──
+    const trunkR = Math.floor(50 + burnProg * 40);
+    const trunkG = Math.floor(30 - burnProg * 20);
+    const trunkB = Math.floor(15 - burnProg * 10);
+    // Dark side
+    ctx.fillStyle = `rgb(${trunkR - 15},${Math.max(0, trunkG - 10)},${Math.max(0, trunkB - 5)})`;
+    ctx.fillRect(sx - t.trunkW / 2, trunkTop, t.trunkW / 2, t.height);
+    // Light side
+    ctx.fillStyle = `rgb(${trunkR},${Math.max(0, trunkG)},${Math.max(0, trunkB)})`;
+    ctx.fillRect(sx, trunkTop, t.trunkW / 2, t.height);
+
+    // ── Canopy (ellipse) ──
+    let cR, cG, cB;
+    if (!t.burning) {
+      cR = 20 + Math.random() * 5 | 0;
+      cG = 80 + Math.random() * 10 | 0;
+      cB = 20 + Math.random() * 5 | 0;
+    } else {
+      // Transition green -> brown/orange -> red
+      if (burnProg < 0.5) {
+        const p = burnProg * 2;
+        cR = Math.floor(20 + p * 160);
+        cG = Math.floor(80 - p * 40);
+        cB = Math.floor(20 - p * 15);
+      } else {
+        const p = (burnProg - 0.5) * 2;
+        cR = Math.floor(180 + p * 75);
+        cG = Math.floor(40 - p * 30);
+        cB = Math.floor(5);
+      }
+      // Flash in critical phase (last 20%)
+      if (burnProg > 0.8 && frameCount % 6 < 3) {
+        cR = 255; cG = 200; cB = 50;
+      }
+    }
+
+    ctx.fillStyle = `rgb(${cR},${cG},${cB})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, canopyCenter, t.canopyW / 2, t.canopyH / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Canopy highlight
+    ctx.fillStyle = `rgba(${cR + 30},${cG + 20},${cB + 10}, 0.4)`;
+    ctx.beginPath();
+    ctx.ellipse(sx, canopyCenter - t.canopyH * 0.15, t.canopyW * 0.35, t.canopyH * 0.25, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ── Platform highlight (so player can see where to land) ──
+    ctx.fillStyle = 'rgba(255, 255, 200, 0.15)';
+    ctx.fillRect(sx - t.canopyW / 2, trunkTop - t.canopyH, t.canopyW, P);
+
+    // ── Fire particles when burning ──
+    if (t.burning) {
+      const numFlames = Math.min(Math.floor(burnProg * 8) + 2, 8);
+      for (let i = 0; i < numFlames; i++) {
+        const fx = sx + (Math.random() - 0.5) * t.canopyW * 0.8;
+        const fy = canopyCenter - t.canopyH * 0.3 + (Math.random() - 0.5) * t.canopyH * 0.6;
+        const fs = P + Math.random() * P;
+        const fireColors = ['#ff4400', '#ff6600', '#ff8800', '#ffaa00', '#ffcc00'];
+        ctx.fillStyle = fireColors[Math.random() * fireColors.length | 0];
+        ctx.globalAlpha = 0.6 + Math.random() * 0.4;
+        ctx.fillRect(fx - fs / 2, fy - fs - Math.random() * 8, fs, fs);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 }
 
@@ -3992,9 +4518,10 @@ function drawPlayer() {
     // Shadow on ground
     ctx.globalAlpha = 0.3;
     ctx.fillStyle = '#000';
-    const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (GROUND_Y - (player.y + player.h)) / 200);
+    const shadowGroundY = level === 4 ? getGroundY(player.x + scrollOffset) : GROUND_Y;
+    const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (shadowGroundY - (player.y + player.h)) / 200);
     ctx.beginPath();
-    ctx.ellipse(cx, GROUND_Y + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, shadowGroundY + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   } else {
@@ -5002,7 +5529,8 @@ function drawTransition() {
   ctx.shadowColor = '#33ccff';
   ctx.shadowBlur = 20;
   ctx.font = `bold 20px ${GAME_FONT}`;
-  ctx.fillText(`LEVEL 1-${level}`, W / 2, H / 2 - 20);
+  const levelDisplay = level <= 3 ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
+  ctx.fillText(levelDisplay, W / 2, H / 2 - 20);
   ctx.shadowBlur = 0;
 
   // Location name
@@ -5063,6 +5591,86 @@ function drawHelpOverlay() {
   ctx.fillText('Press any key to close', W / 2, H - 30);
 }
 
+function drawRocks() {
+  for (const r of rocks) {
+    const sx = r.worldX - scrollOffset;
+    if (sx < -50 || sx > W + 50) continue;
+    const cy = getGroundY(r.worldX) - r.radius;
+    ctx.save();
+    ctx.translate(sx, cy);
+    ctx.rotate(r.rotation);
+    // Main body
+    ctx.beginPath();
+    ctx.arc(0, 0, r.radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#6b5b4f';
+    ctx.fill();
+    // Darker edge
+    ctx.strokeStyle = '#4a3a2e';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Crack lines
+    ctx.beginPath();
+    ctx.moveTo(-r.radius * 0.3, -r.radius * 0.2);
+    ctx.lineTo(r.radius * 0.1, r.radius * 0.3);
+    ctx.lineTo(r.radius * 0.4, r.radius * 0.1);
+    ctx.strokeStyle = '#4a3a2e';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(r.radius * 0.2, -r.radius * 0.5);
+    ctx.lineTo(-r.radius * 0.1, -r.radius * 0.1);
+    ctx.stroke();
+    // 3D highlight
+    ctx.beginPath();
+    ctx.arc(-r.radius * 0.25, -r.radius * 0.25, r.radius * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(180, 170, 155, 0.3)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawMoltenRocks() {
+  for (const mr of moltenRocks) {
+    const sx = mr.worldX - scrollOffset;
+    if (sx < -50 || sx > W + 50) continue;
+    const cy = getGroundY(mr.worldX) - mr.radius;
+    ctx.save();
+    ctx.translate(sx, cy);
+    ctx.rotate(mr.rotation);
+    // Glow effect
+    const glowIntensity = 10 + Math.sin(mr.glowPhase) * 6;
+    ctx.shadowColor = '#ff6600';
+    ctx.shadowBlur = glowIntensity;
+    // Main body — radial gradient
+    const grad = ctx.createRadialGradient(0, 0, mr.radius * 0.1, 0, 0, mr.radius);
+    grad.addColorStop(0, '#ffaa00');
+    grad.addColorStop(0.5, '#cc4400');
+    grad.addColorStop(1, '#661100');
+    ctx.beginPath();
+    ctx.arc(0, 0, mr.radius, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    // Lava crack lines
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-mr.radius * 0.4, -mr.radius * 0.1);
+    ctx.lineTo(mr.radius * 0.05, mr.radius * 0.35);
+    ctx.lineTo(mr.radius * 0.35, mr.radius * 0.05);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mr.radius * 0.15, -mr.radius * 0.45);
+    ctx.lineTo(-mr.radius * 0.15, -mr.radius * 0.05);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-mr.radius * 0.1, mr.radius * 0.2);
+    ctx.lineTo(mr.radius * 0.3, mr.radius * 0.35);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── MAIN DRAW ──
 function draw() {
   ctx.save();
@@ -5084,14 +5692,31 @@ function draw() {
   } else if (gameState === 'dojo') {
     drawDojo();
   } else {
-    // Draw city normally — no fading
-    drawNeoTokyoSky();
-    drawBuildingLayer(buildings_far, 0.1, 0);
-    drawBuildingLayer(buildings_mid, 0.3, 0.3);
-    drawNeonSigns();
-    drawBuildingLayer(buildings_near, 0.5, 0.1);
-    drawStreet();
-    drawStreetLamps();
+    // Draw city background — destroyed ruins for level 4, neon city otherwise
+    if (level === 4) {
+      drawDestroyedCitySky();
+      drawRuinsLayer(ruins_far, 0.1, 0, false);
+      drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
+      drawRuinsLayer(ruins_near, 0.8, 0.1, true);
+    } else {
+      drawNeoTokyoSky();
+      drawBuildingLayer(buildings_far, 0.1, 0);
+      drawBuildingLayer(buildings_mid, 0.3, 0.3);
+      drawNeonSigns();
+      drawBuildingLayer(buildings_near, 0.5, 0.1);
+    }
+    if (level === 4) {
+      drawVolcanicGround();
+    } else {
+      drawStreet();
+    }
+    if (level === 4) {
+      drawTrees();
+    } else {
+      drawStreetLamps();
+    }
+    if (level === 4) drawRocks();
+    if (level === 4) drawMoltenRocks();
 
     // Shadow overlay — everything falls into darkness near end of level 3
     if (villageProgress > 0) {
