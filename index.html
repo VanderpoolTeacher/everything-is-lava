@@ -3146,6 +3146,21 @@ function drawLavaDrops() {
 
     const pulse = Math.sin(w.life * 0.3) * 0.3 + 0.5;
     const alpha = (w.life / w.maxLife) * pulse;
+
+    // ── Ground flash: subtle heat glow on the street ──
+    const flashIntensity = (1 - w.life / w.maxLife); // grows stronger as impact approaches
+    const flicker = 0.7 + Math.sin(w.life * 0.5) * 0.3;
+    const glowAlpha = flashIntensity * flicker * 0.35;
+    const glowW = 40 + flashIntensity * 20; // widens as impact nears
+    // Soft orange glow rectangle on ground
+    ctx.globalAlpha = glowAlpha;
+    ctx.fillStyle = '#ff4400';
+    ctx.fillRect(sx - glowW / 2, GROUND_Y - 4, glowW, 8);
+    // Dimmer wider halo
+    ctx.globalAlpha = glowAlpha * 0.4;
+    ctx.fillStyle = '#ff2200';
+    ctx.fillRect(sx - glowW, GROUND_Y - 2, glowW * 2, 6);
+
     ctx.globalAlpha = alpha;
 
     // Red target on ground
