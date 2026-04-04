@@ -112,6 +112,11 @@ volcanoImg.src = 'assets/volcano.png';
 let volcanoReady = false;
 volcanoImg.onload = function() { volcanoReady = true; };
 
+const level2BgImg = new Image();
+level2BgImg.src = 'assets/level-2-bg.png';
+let level2BgReady = false;
+level2BgImg.onload = function() { level2BgReady = true; };
+
 const titleImg = new Image();
 titleImg.src = 'assets/everything-is-lava-title.png';
 let titleReady = false;
@@ -2998,12 +3003,31 @@ function drawDojo() {
 
 // ── DESTROYED CITY SKY (Level 4) ──
 function drawDestroyedCitySky() {
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
-  skyGrad.addColorStop(0, '#1a0505');
-  skyGrad.addColorStop(0.4, '#3d1111');
-  skyGrad.addColorStop(1, '#5a1a0a');
-  ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, W, H);
+  // ── Level 2-1 background image (cover scaling + slow parallax) ──
+  if (level2BgReady) {
+    const imgAspect = level2BgImg.width / level2BgImg.height;
+    const canvasAspect = W / H;
+    let drawW, drawH;
+    if (canvasAspect > imgAspect) {
+      drawW = W;
+      drawH = W / imgAspect;
+    } else {
+      drawH = H;
+      drawW = H * imgAspect;
+    }
+    const parallaxX = -(scrollOffset * 0.02) % (drawW - W);
+    const drawX = Math.min(0, Math.max(-(drawW - W), parallaxX));
+    const drawY = -(drawH - H) / 2;
+    ctx.drawImage(level2BgImg, drawX, drawY, drawW, drawH);
+  } else {
+    // Fallback gradient if image hasn't loaded yet
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+    skyGrad.addColorStop(0, '#1a0505');
+    skyGrad.addColorStop(0.4, '#3d1111');
+    skyGrad.addColorStop(1, '#5a1a0a');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, W, H);
+  }
   // Ash particles
   for (let i = 0; i < 20; i++) {
     const hash = (i * 7919 + Math.floor(frameCount * 0.3)) & 0xFFFF;
@@ -5695,8 +5719,10 @@ function draw() {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (level === 4) {
       drawDestroyedCitySky();
-      drawRuinsLayer(ruins_far, 0.1, 0, false);
-      drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
+      if (!level2BgReady) {
+        drawRuinsLayer(ruins_far, 0.1, 0, false);
+        drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
+      }
       drawRuinsLayer(ruins_near, 0.8, 0.1, true);
     } else {
       drawNeoTokyoSky();
