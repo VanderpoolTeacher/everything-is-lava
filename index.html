@@ -3015,9 +3015,12 @@ function drawDestroyedCitySky() {
       drawH = H;
       drawW = H * imgAspect;
     }
-    const parallaxX = -(scrollOffset * 0.02) % (drawW - W);
-    const drawX = Math.min(0, Math.max(-(drawW - W), parallaxX));
-    const drawY = -(drawH - H) / 2;
+    // Ping-pong parallax (same approach as volcano bg — never exceeds coverage)
+    const maxShift = Math.max(1, (drawW - W) / 2);
+    const rawShift = (scrollOffset * 0.01) % (maxShift * 2);
+    const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
+    const drawX = (W - drawW) / 2 + shiftX;
+    const drawY = (H - drawH) / 2;
     ctx.drawImage(level2BgImg, drawX, drawY, drawW, drawH);
   } else {
     // Fallback gradient if image hasn't loaded yet
@@ -5697,6 +5700,7 @@ function drawMoltenRocks() {
 
 // ── MAIN DRAW ──
 function draw() {
+  ctx.clearRect(0, 0, W, H);
   ctx.save();
 
   if (shakeTimer > 0) {
