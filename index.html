@@ -112,11 +112,6 @@ volcanoImg.src = 'assets/volcano.png';
 let volcanoReady = false;
 volcanoImg.onload = function() { volcanoReady = true; };
 
-const level2BgImg = new Image();
-level2BgImg.src = 'assets/level-2-bg.png';
-let level2BgReady = false;
-level2BgImg.onload = function() { level2BgReady = true; };
-
 const titleImg = new Image();
 titleImg.src = 'assets/everything-is-lava-title.png';
 let titleReady = false;
@@ -3003,254 +2998,83 @@ function drawDojo() {
 
 // ── DESTROYED CITY SKY (Level 4) ──
 function drawDestroyedCitySky() {
-  const P = 4; // pixel grid
-
-  // ── Level 2 background image (full canvas, cover scaling) ──
-  if (level2BgReady) {
-    const imgAspect = level2BgImg.width / level2BgImg.height;
-    const canvasAspect = W / H;
-    let drawW, drawH;
-    if (canvasAspect > imgAspect) {
-      drawW = W;
-      drawH = W / imgAspect;
-    } else {
-      drawH = H;
-      drawW = H * imgAspect;
-    }
-    // Very slow parallax shift
-    const parallaxX = -(scrollOffset * 0.02) % (drawW - W);
-    const drawX = Math.min(0, Math.max(-(drawW - W), parallaxX));
-    const drawY = -(drawH - H) / 2;
-    ctx.drawImage(level2BgImg, drawX, drawY, drawW, drawH);
-    // Procedural effects still draw on top for added depth
-  }
-
-  // ── Banded sky fallback (only if bg image not loaded) ──
-  if (!level2BgReady) {
-    const skyBands = [
-      { y: 0,     h: 0.12, color: '#0d0208' },
-      { y: 0.12,  h: 0.10, color: '#140408' },
-      { y: 0.22,  h: 0.13, color: '#1a0508' },
-      { y: 0.35,  h: 0.10, color: '#2a0b0e' },
-      { y: 0.45,  h: 0.10, color: '#3d1111' },
-      { y: 0.55,  h: 0.10, color: '#4a1808' },
-      { y: 0.65,  h: 0.10, color: '#5a2010' },
-      { y: 0.75,  h: 0.10, color: '#6b2a0c' },
-      { y: 0.85,  h: 0.15, color: '#4a1808' },
-    ];
-    for (const b of skyBands) {
-      ctx.fillStyle = b.color;
-      const by = Math.round(b.y * H / P) * P;
-      const bh = Math.round(b.h * H / P) * P;
-      ctx.fillRect(0, by, W, bh);
-    }
-  }
-
-  // ── Distant volcano glow (pixelated concentric rects) ──
-  const volcPulse = 0.35 + 0.15 * Math.sin(frameCount * 0.012);
-  const vcx = Math.round(W * 0.65 / P) * P;
-  const vcy = Math.round(H * 0.55 / P) * P;
-  const glowLayers = [
-    { size: 60, color: [255, 80, 20], mult: 0.12 },
-    { size: 44, color: [255, 80, 20], mult: 0.18 },
-    { size: 28, color: [200, 40, 10], mult: 0.22 },
-    { size: 16, color: [255, 100, 30], mult: 0.28 },
-  ];
-  for (const g of glowLayers) {
-    ctx.globalAlpha = volcPulse * g.mult;
-    ctx.fillStyle = `rgb(${g.color[0]},${g.color[1]},${g.color[2]})`;
-    ctx.fillRect(vcx - g.size, vcy - g.size / 2, g.size * 2, g.size);
-    ctx.globalAlpha = 1;
-  }
-
-  // ── Smoke clouds (pixelated block clusters) ──
-  for (let i = 0; i < 6; i++) {
-    const seed = i * 3571;
-    const cx = Math.round(((seed + frameCount * (0.15 + i * 0.04)) % (W + 400) - 200) / P) * P;
-    const cy = Math.round((30 + (seed % 120)) / P) * P;
-    const sAlpha = 0.04 + (seed % 20) / 600;
-    ctx.fillStyle = `rgba(60, 30, 20, ${sAlpha})`;
-    // Draw cloud as cluster of pixel blocks
-    const cw = 20 + (seed % 15);
-    for (let bx = -cw; bx <= cw; bx += P) {
-      const bh = Math.max(P, Math.round((1 - Math.abs(bx) / cw) * (5 + (seed % 4))) / P * P);
-      ctx.fillRect(cx + bx, cy - bh / 2, P, bh);
-    }
-  }
-
-  // ── Ash particles (snapped to pixel grid) ──
-  for (let i = 0; i < 35; i++) {
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+  skyGrad.addColorStop(0, '#1a0505');
+  skyGrad.addColorStop(0.4, '#3d1111');
+  skyGrad.addColorStop(1, '#5a1a0a');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, H);
+  // Ash particles
+  for (let i = 0; i < 20; i++) {
     const hash = (i * 7919 + Math.floor(frameCount * 0.3)) & 0xFFFF;
-    const ax = Math.round((hash % W) / P) * P;
-    const ay = Math.round(((hash * 3 + frameCount * (0.4 + (i % 3) * 0.15)) % H) / P) * P;
-    const aAlpha = 0.15 + (hash % 40) / 200;
-    ctx.fillStyle = `rgba(180, 160, 140, ${aAlpha})`;
-    ctx.fillRect(ax, ay, P, P);
-  }
-
-  // ── Floating embers (pixel sparks) ──
-  for (let i = 0; i < 12; i++) {
-    const seed = i * 4813;
-    const ex = Math.round(((seed + Math.sin(frameCount * 0.008 + i) * 30) % W) / P) * P;
-    const ey = Math.round((H - ((frameCount * (0.6 + (seed % 5) * 0.2) + seed) % (H + 40))) / P) * P;
-    if (ey < -P) continue;
-    const flicker = 0.4 + 0.5 * Math.sin(frameCount * 0.1 + i * 2.1);
-    ctx.fillStyle = `rgba(255, ${140 + (seed % 80)}, 30, ${flicker * 0.7})`;
-    ctx.fillRect(ex, ey, P, P);
-  }
-
-  // ── Distant lightning flashes (flat rect flash, no gradient) ──
-  const lightningCycle = (frameCount + 137) % 480;
-  if (lightningCycle < 3) {
-    const lx = Math.round((100 + ((frameCount * 73) % (W - 200))) / P) * P;
-    const lAlpha = (3 - lightningCycle) / 3 * 0.12;
-    // Pixelated flash — layered rects
-    ctx.globalAlpha = lAlpha;
-    ctx.fillStyle = '#ffddcc';
-    ctx.fillRect(lx - 80, H * 0.2, 160, H * 0.25);
-    ctx.globalAlpha = lAlpha * 0.5;
-    ctx.fillStyle = '#ff8855';
-    ctx.fillRect(lx - 140, H * 0.15, 280, H * 0.35);
-    ctx.globalAlpha = 1;
+    const ax = hash % W;
+    const ay = (hash * 3 + frameCount * 0.5) % H;
+    ctx.fillStyle = `rgba(180, 160, 140, ${0.2 + (hash % 30) / 100})`;
+    ctx.fillRect(ax, ay, 2, 2);
   }
 }
 
 // ── RUINS LAYER (Level 4 parallax) ──
 function drawRuinsLayer(ruins, parallaxSpeed, brightness, isNear) {
-  const P = 4; // pixel grid
   const offset = scrollOffset * parallaxSpeed;
-  const baseY = Math.round(GROUND_Y / P) * P;
+  const baseY = GROUND_Y; // background uses flat baseline
   for (let i = 0; i < ruins.length; i++) {
     const r = ruins[i];
-    const rawSx = ((r.x - offset) % (W + 600) + W + 600) % (W + 600) - 300;
-    const sx = Math.round(rawSx / P) * P;
-    const rw = Math.round(r.w / P) * P;
-    if (sx + rw < -P || sx > W + P) continue;
+    const sx = ((r.x - offset) % (W + 600) + W + 600) % (W + 600) - 300;
+    if (sx + r.w < -50 || sx > W + 50) continue;
 
     const bri = Math.floor(brightness * 40);
     const rb = 30 + bri;
     const gb = 15 + bri;
     const bb = 10 + bri;
-    const rh = Math.round(r.h / P) * P;
-
-    // ── Building body (two flat color bands instead of gradient) ──
-    const topH = Math.round(rh * 0.4 / P) * P;
-    const botH = rh - topH;
-    ctx.fillStyle = `rgb(${rb + 6},${gb + 3},${bb + 2})`;
-    ctx.fillRect(sx, baseY - rh, rw, topH);
     ctx.fillStyle = `rgb(${rb},${gb},${bb})`;
-    ctx.fillRect(sx, baseY - rh + topH, rw, botH);
 
     if (r.jagged) {
-      // Jagged roofline — pixel-snapped staircase cutout
+      // Jagged broken roofline
+      ctx.beginPath();
+      ctx.moveTo(sx, baseY);
+      ctx.lineTo(sx, baseY - r.h);
+      // Jagged top edge
+      const jaggedW = r.w;
       const segments = 3 + (i % 3);
-      const segW = Math.max(P, Math.round(rw / segments / P) * P);
-      for (let j = 0; j < segments; j++) {
-        const jag = ((j * 1931 + i * 4271) & 0xF) - 4;
-        const cutH = Math.round((Math.abs(jag) + (j % 2) * 4) / P) * P;
-        // Cut away pixels from top of building
-        ctx.fillStyle = skyBandColorAt(baseY - rh, i);
-        ctx.fillRect(sx + j * segW, baseY - rh, segW, cutH);
+      for (let j = 1; j <= segments; j++) {
+        const jx = sx + (jaggedW * j / segments);
+        const jy = baseY - r.h + ((j % 2 === 0) ? 8 + (i % 5) * 3 : -4 - (i % 4) * 2);
+        ctx.lineTo(jx, jy);
       }
-
-      // ── Exposed rebar (pixel lines) ──
-      if (isNear) {
-        ctx.fillStyle = `rgba(${rb + 20},${gb + 10},${bb + 5}, 0.4)`;
-        for (let k = 0; k < 3; k++) {
-          const lx = Math.round((sx + rw * (0.2 + k * 0.3)) / P) * P;
-          const ly = baseY - rh + Math.round(((k * 1117 + i * 313) & 0xF) / P) * P;
-          // Vertical pixel line (1px wide, several P tall)
-          for (let py = 0; py < 3; py++) {
-            ctx.fillRect(lx, ly + py * P, P, P);
-          }
-        }
-      }
+      ctx.lineTo(sx + r.w, baseY - r.h * 0.6);
+      ctx.lineTo(sx + r.w, baseY);
+      ctx.closePath();
+      ctx.fill();
     } else {
-      // Crumbled top — cut a few random pixel blocks from the top edge
-      for (let c = 0; c < 3; c++) {
-        const cx = sx + Math.round((c * rw / 3) / P) * P;
-        const ch = P + ((i + c) % 2) * P;
-        ctx.fillStyle = skyBandColorAt(baseY - rh, i);
-        ctx.fillRect(cx, baseY - rh, P * 2, ch);
-      }
+      // Simple crumbled rectangle
+      ctx.fillRect(sx, baseY - r.h, r.w, r.h);
     }
 
-    // ── Vertical damage cracks (pixel columns) ──
-    if (rw > 24) {
-      ctx.fillStyle = `rgba(${Math.max(0, rb - 15)},${Math.max(0, gb - 8)},${Math.max(0, bb - 5)}, 0.6)`;
-      const crackX = Math.round((sx + rw * (0.3 + (i * 137 % 40) / 100)) / P) * P;
-      const crackTop = Math.round((baseY - rh * (0.4 + (i % 3) * 0.15)) / P) * P;
-      for (let cy = crackTop; cy < crackTop + rh * 0.4; cy += P) {
-        const wobble = ((cy * 31 + i * 17) & 3) === 0 ? P : 0;
-        ctx.fillRect(crackX + wobble, cy, P, P);
-      }
-    }
-
-    // ── Windows (pixel grid, P-sized blocks) ──
+    // Mid buildings with glow: flickering orange windows
     if (r.hasGlow) {
-      const baseFlicker = 0.25 + 0.45 * Math.sin(frameCount * 0.04 + r.glowPhase);
-      for (let wy = baseY - rh + P * 2; wy < baseY - P * 2; wy += P * 3) {
-        for (let wx = sx + P; wx < sx + rw - P; wx += P * 3) {
-          const winHash = (wx * 13 + wy * 7) & 0xF;
-          if (winHash < 5) {
-            const wFlicker = baseFlicker + 0.15 * Math.sin(frameCount * 0.06 + winHash * 1.3);
-            if (winHash < 2) {
-              ctx.fillStyle = `rgba(255, 200, 80, ${wFlicker * 0.8})`;
-            } else {
-              ctx.fillStyle = `rgba(255, 120, 30, ${wFlicker})`;
-            }
-            ctx.fillRect(wx, wy, P, P);
+      const flicker = 0.3 + 0.4 * Math.sin(frameCount * 0.04 + r.glowPhase);
+      ctx.fillStyle = `rgba(255, 120, 30, ${flicker})`;
+      const winW = 4, winH = 5;
+      for (let wy = baseY - r.h + 8; wy < baseY - 6; wy += 12) {
+        for (let wx = sx + 4; wx < sx + r.w - 6; wx += 10) {
+          if (((wx * 13 + wy * 7) & 7) < 3) {
+            ctx.fillRect(wx, wy, winW, winH);
           }
         }
       }
     }
 
-    // ── Smoke (pixel block clusters rising) ──
-    if (isNear && (i % 2 === 0)) {
-      const smokeBaseX = Math.round((sx + rw * 0.4 + (i * 31 % 20)) / P) * P;
-      for (let s = 0; s < 3; s++) {
-        const smokeX = smokeBaseX + Math.round((Math.sin(frameCount * 0.015 + i * 1.7 + s * 2) * 8) / P) * P;
-        const smokeY = Math.round((baseY - rh - 8 - s * 12 - (frameCount * 0.3 + i * 20) % 40) / P) * P;
-        const smokeA = Math.max(0, 0.12 - s * 0.03);
-        ctx.fillStyle = `rgba(80, 60, 50, ${smokeA})`;
-        const sw = P * (2 + s);
-        ctx.fillRect(smokeX - sw / 2, smokeY, sw, P);
-        ctx.fillRect(smokeX - sw / 2 + P, smokeY - P, sw - P * 2, P);
-      }
-    }
-
-    // ── Ember pixels rising ──
+    // Near layer: occasional ember particles (drawn inline, no allocation)
     if (isNear && (i % 3 === 0)) {
-      for (let e = 0; e < 3; e++) {
-        const ex = Math.round((sx + rw * (0.3 + e * 0.2) + Math.sin(frameCount * 0.02 + i * 2.3 + e * 1.5) * 6) / P) * P;
-        const ey = Math.round((baseY - rh - 5 - ((frameCount + i * 47 + e * 23) % 40)) / P) * P;
-        const ea = 0.5 + 0.3 * Math.sin(frameCount * 0.04 + e * 2);
-        ctx.fillStyle = `rgba(255, ${60 + e * 30}, 20, ${ea})`;
-        ctx.fillRect(ex, ey, P, P);
-      }
-    }
-
-    // ── Rubble pixels at base ──
-    if (isNear) {
-      ctx.fillStyle = `rgb(${rb + 5},${gb + 3},${bb + 2})`;
-      for (let d = 0; d < 5; d++) {
-        const dx = Math.round((sx + (d * rw / 5) + ((d * 719 + i * 311) % 8)) / P) * P;
-        ctx.fillRect(dx, baseY - P, P, P);
-        if (d % 2 === 0) ctx.fillRect(dx + P, baseY - P, P, P);
-      }
+      const et = frameCount * 0.02 + i * 2.3;
+      const ex = sx + r.w * 0.5 + Math.sin(et * 1.3) * 6;
+      const ey = baseY - r.h - 5 - ((frameCount + i * 47) % 30);
+      const ea = 0.4 + 0.3 * Math.sin(et * 2);
+      ctx.fillStyle = `rgba(255, 80, 20, ${ea})`;
+      ctx.fillRect(ex, ey, 2, 2);
     }
   }
-}
-
-// Helper: return a sky-ish color for cutout pixels (so jagged tops blend with sky)
-function skyBandColorAt(y, seed) {
-  const t = y / H;
-  if (t < 0.2) return '#0d0208';
-  if (t < 0.35) return '#1a0508';
-  if (t < 0.5) return '#3d1111';
-  if (t < 0.65) return '#5a2010';
-  if (t < 0.8) return '#6b2a0c';
-  return '#4a1808';
 }
 
 function drawNeoTokyoSky() {
@@ -3570,118 +3394,62 @@ function drawStreet() {
 }
 
 function drawVolcanicGround() {
-  const P = 4; // pixel grid
   const so = scrollOffset;
+  const step = 4; // sample every 4px for performance
 
-  // 1. Ground fill — flat color bands (no gradient), pixel-stepped surface
-  const groundColors = ['#4a2a18', '#3a2515', '#2a1a10', '#1a0d08'];
-  for (let sx = 0; sx < W; sx += P) {
-    const gy = Math.round(getGroundY(sx + so) / P) * P;
-    const depth = H - gy;
-    const bandH = Math.max(P, Math.round(depth / groundColors.length / P) * P);
-    for (let b = 0; b < groundColors.length; b++) {
-      ctx.fillStyle = groundColors[b];
-      const by = gy + b * bandH;
-      const bh = b === groundColors.length - 1 ? H - by : bandH;
-      ctx.fillRect(sx, by, P, bh);
-    }
+  // 1. Filled polygon: ground surface down to canvas bottom
+  ctx.beginPath();
+  ctx.moveTo(0, H); // bottom-left
+  for (let sx = 0; sx <= W; sx += step) {
+    ctx.lineTo(sx, getGroundY(sx + so));
   }
+  ctx.lineTo(W, H); // bottom-right
+  ctx.closePath();
+  ctx.fillStyle = '#3a2515';
+  ctx.fill();
 
-  // 2. Surface edge — pixel-snapped top border (two pixel rows)
-  for (let sx = 0; sx < W; sx += P) {
-    const gy = Math.round(getGroundY(sx + so) / P) * P;
-    ctx.fillStyle = '#5a3a28';
-    ctx.fillRect(sx, gy, P, P);
-    // Glow pixel above surface
-    ctx.globalAlpha = 0.3;
-    ctx.fillStyle = '#7a4a30';
-    ctx.fillRect(sx, gy - P, P, P);
-    ctx.globalAlpha = 1;
+  // 2. Surface line along the top
+  ctx.beginPath();
+  ctx.moveTo(0, getGroundY(so));
+  for (let sx = step; sx <= W; sx += step) {
+    ctx.lineTo(sx, getGroundY(sx + so));
   }
+  ctx.strokeStyle = '#5a3a28';
+  ctx.lineWidth = 3;
+  ctx.stroke();
 
-  // 3. Rocky texture (dark pixel patches on ground)
-  for (let i = 0; i < 18; i++) {
-    const seed = (i * 6173 + Math.floor(so * 0.3)) & 0xFFFF;
-    const rx = Math.round((((seed * 3) % (W + 100)) - 50) / P) * P;
-    const gy = Math.round(getGroundY(rx + so) / P) * P;
-    ctx.fillStyle = `rgba(20, 12, 8, ${0.2 + (seed % 20) / 100})`;
-    const pw = P * (2 + seed % 3);
-    ctx.fillRect(rx, gy + P + (seed % 2) * P, pw, P);
-  }
-
-  // 4. Lava vein cracks (pixel chains, no strokes)
-  const veinCount = 14;
+  // 3. Animated lava vein cracks
+  const veinCount = 10;
   for (let i = 0; i < veinCount; i++) {
-    const baseX = i * 90 + 20;
-    const sx = Math.round((((baseX - so * 0.6) % (W + 200) + W + 200) % (W + 200) - 100) / P) * P;
+    const baseX = i * 120 + 30;
+    const sx = ((baseX - so * 0.6) % (W + 200) + W + 200) % (W + 200) - 100;
     if (sx < -50 || sx > W + 50) continue;
 
-    const gy = Math.round(getGroundY(sx + so) / P) * P;
-    const pulse = 0.3 + 0.5 * Math.sin(frameCount * 0.03 + i * 1.7);
+    const gy = getGroundY(sx + so);
+    const pulse = 0.3 + 0.4 * Math.sin(frameCount * 0.03 + i * 1.7);
     ctx.globalAlpha = pulse;
-    const veinColor = i % 3 === 0 ? '#ffcc00' : (i % 3 === 1 ? '#ff4500' : '#ff6a00');
-    ctx.fillStyle = veinColor;
-
-    // Draw vein as chain of P-sized pixels going down-right
-    let vx = sx, vy = gy + P;
-    for (let seg = 0; seg < 4 + (i % 3); seg++) {
-      ctx.fillRect(vx, vy, P, P);
-      vx += P * (1 + ((seg + i) & 1));
-      vy += P;
-    }
-
-    // Branch
-    if (i % 2 === 0) {
-      let bx = sx + P * 2, by = gy + P * 2;
-      for (let seg = 0; seg < 2; seg++) {
-        ctx.fillRect(bx, by, P, P);
-        bx += P;
-        by += P;
-      }
-    }
-
-    // Glow pixel cluster around bright veins
-    if (i % 3 === 0) {
-      ctx.globalAlpha = pulse * 0.15;
-      ctx.fillStyle = '#ff6420';
-      ctx.fillRect(sx - P, gy + P * 2, P * 4, P * 2);
-    }
+    ctx.strokeStyle = i % 2 === 0 ? '#ff4500' : '#ff6a00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, gy + 6);
+    ctx.lineTo(sx + 10 + (i % 3) * 5, gy + 14 + (i % 4) * 4);
+    ctx.lineTo(sx + 22 + (i % 2) * 8, gy + 20 + (i % 3) * 6);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  // 5. Pebble pixels
-  for (let i = 0; i < 12; i++) {
-    const seed = (i * 2917 + Math.floor(so * 0.4)) & 0xFFFF;
-    const px = Math.round((((seed * 7) % (W + 80)) - 40) / P) * P;
-    const gy = Math.round(getGroundY(px + so) / P) * P;
-    ctx.fillStyle = `rgb(${55 + seed % 20},${35 + seed % 15},${25 + seed % 10})`;
-    ctx.fillRect(px, gy - P, P, P);
+  // 4. Smoke wisps rising from the ground
+  for (let i = 0; i < 5; i++) {
+    const hash = ((Math.floor(scrollOffset / 300) + i) * 4391) & 0xFFFF;
+    const wsx = ((hash % W) + W) % W;
+    const wgy = getGroundY(wsx + scrollOffset);
+    const wispY = wgy - 10 - Math.sin(frameCount * 0.02 + i * 1.5) * 15;
+    const walpha = 0.1 + Math.sin(frameCount * 0.015 + i * 2) * 0.05;
+    ctx.fillStyle = `rgba(120, 110, 100, ${walpha})`;
+    ctx.beginPath();
+    ctx.ellipse(wsx, wispY, 8, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
-
-  // 6. Smoke wisps (pixel block clusters)
-  for (let i = 0; i < 8; i++) {
-    const hash = ((Math.floor(scrollOffset / 250) + i) * 4391) & 0xFFFF;
-    const wsx = Math.round((((hash % W) + W) % W) / P) * P;
-    const wgy = Math.round(getGroundY(wsx + scrollOffset) / P) * P;
-    const rise = Math.round(Math.abs(Math.sin(frameCount * 0.02 + i * 1.5)) * 15 / P) * P;
-    const wispY = wgy - P * 2 - rise;
-    const walpha = 0.08 + Math.sin(frameCount * 0.015 + i * 2) * 0.04;
-    ctx.fillStyle = `rgba(100, 90, 80, ${walpha})`;
-    const sw = P * (2 + (i % 3));
-    ctx.fillRect(wsx, wispY, sw, P);
-    if (i % 2 === 0) ctx.fillRect(wsx + P, wispY - P, sw - P * 2, P);
-  }
-
-  // 7. Heat shimmer (pixel row that shifts)
-  const shimmerAlpha = 0.06 + 0.03 * Math.sin(frameCount * 0.04);
-  ctx.globalAlpha = shimmerAlpha;
-  ctx.fillStyle = '#ff8844';
-  for (let sx = 0; sx < W; sx += P) {
-    const gy = Math.round(getGroundY(sx + so) / P) * P;
-    const shift = ((frameCount + sx) & 7) < 4 ? 0 : P;
-    ctx.fillRect(sx, gy - P * 2 + shift, P, P);
-  }
-  ctx.globalAlpha = 1;
 }
 
 // Pool depth helper — hoisted out of per-frame loop to avoid closure allocation
@@ -4233,62 +4001,35 @@ function drawTrees() {
   const P = 4; // pixel grid size
   for (const t of trees) {
     if (t.collapsed) continue;
-    const sx = Math.round((t.worldX - scrollOffset) / P) * P;
+    const sx = t.worldX - scrollOffset;
     if (sx < -100 || sx > W + 100) continue;
 
-    const baseY = Math.round(getGroundY(t.worldX) / P) * P;
-    const trunkH = Math.round(t.height / P) * P;
-    const trunkTop = baseY - trunkH;
-    const trunkW = Math.max(P * 2, Math.round(t.trunkW / P) * P);
-    const canopyW = Math.round(t.canopyW / P) * P;
-    const canopyH = Math.round(t.canopyH / P) * P;
-    const canopyTop = trunkTop - canopyH;
-    const canopyCenter = trunkTop - canopyH / 2;
+    const baseY = getGroundY(t.worldX);
+    const trunkTop = baseY - t.height;
+    const canopyCenter = trunkTop - t.canopyH / 2;
 
+    // Burn color progression
     const burnProg = t.burning ? Math.min(t.burnTimer / 210, 1) : 0;
 
-    // ── Pixel shadow on ground ──
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-    const shW = Math.round(canopyW * 0.4 / P) * P;
-    ctx.fillRect(sx - shW / 2 + P, baseY, shW, P);
-
-    // ── Pixel roots ──
-    const rootColor = burnProg > 0.3 ? `rgb(${55 + burnProg * 30 | 0}, ${20 - burnProg * 10 | 0}, 10)` : '#3a2010';
-    ctx.fillStyle = rootColor;
-    ctx.fillRect(sx - trunkW / 2 - P, baseY - P, P, P);
-    ctx.fillRect(sx + trunkW / 2, baseY - P, P, P);
-
-    // ── Pixel trunk (two-tone columns) ──
+    // ── Trunk ──
     const trunkR = Math.floor(50 + burnProg * 40);
     const trunkG = Math.floor(30 - burnProg * 20);
     const trunkB = Math.floor(15 - burnProg * 10);
     // Dark side
     ctx.fillStyle = `rgb(${trunkR - 15},${Math.max(0, trunkG - 10)},${Math.max(0, trunkB - 5)})`;
-    ctx.fillRect(sx - trunkW / 2, trunkTop, trunkW / 2, trunkH);
+    ctx.fillRect(sx - t.trunkW / 2, trunkTop, t.trunkW / 2, t.height);
     // Light side
     ctx.fillStyle = `rgb(${trunkR},${Math.max(0, trunkG)},${Math.max(0, trunkB)})`;
-    ctx.fillRect(sx, trunkTop, trunkW / 2, trunkH);
-    // Bark pixels (horizontal lines)
-    ctx.fillStyle = `rgba(${Math.max(0, trunkR - 25)},${Math.max(0, trunkG - 15)},${Math.max(0, trunkB - 8)}, 0.5)`;
-    for (let b = 0; b < 3; b++) {
-      const by = Math.round((trunkTop + trunkH * (0.2 + b * 0.3)) / P) * P;
-      ctx.fillRect(sx - trunkW / 2, by, trunkW, P);
-    }
+    ctx.fillRect(sx, trunkTop, t.trunkW / 2, t.height);
 
-    // ── Branch stubs (pixel blocks) ──
-    ctx.fillStyle = `rgb(${trunkR - 5},${Math.max(0, trunkG - 5)},${Math.max(0, trunkB - 3)})`;
-    const branchY = Math.round((trunkTop + trunkH * 0.3) / P) * P;
-    ctx.fillRect(sx - trunkW / 2 - P, branchY, P, P);
-    ctx.fillRect(sx + trunkW / 2, branchY + P * 2, P, P);
-
-    // ── Pixel canopy (diamond/blob shape built from rects) ──
+    // ── Canopy (ellipse) ──
     let cR, cG, cB;
-    const colorSeed = (t.worldX * 137) & 0xFF;
     if (!t.burning) {
-      cR = 18 + (colorSeed % 8);
-      cG = 75 + (colorSeed % 15);
-      cB = 18 + (colorSeed % 8);
+      cR = 20 + Math.random() * 5 | 0;
+      cG = 80 + Math.random() * 10 | 0;
+      cB = 20 + Math.random() * 5 | 0;
     } else {
+      // Transition green -> brown/orange -> red
       if (burnProg < 0.5) {
         const p = burnProg * 2;
         cR = Math.floor(20 + p * 160);
@@ -4300,86 +4041,38 @@ function drawTrees() {
         cG = Math.floor(40 - p * 30);
         cB = Math.floor(5);
       }
+      // Flash in critical phase (last 20%)
       if (burnProg > 0.8 && frameCount % 6 < 3) {
         cR = 255; cG = 200; cB = 50;
       }
     }
 
-    // Build canopy as rows of pixels (wider in middle, narrower at top/bottom)
-    const rows = Math.max(2, canopyH / P);
-    for (let row = 0; row < rows; row++) {
-      const ry = canopyTop + row * P;
-      // Diamond profile: widen then narrow
-      const t2 = row / (rows - 1); // 0→1 from top to bottom
-      const widthFrac = t2 < 0.5 ? t2 * 2 : (1 - t2) * 2;
-      const rowW = Math.max(P * 2, Math.round(canopyW * (0.3 + widthFrac * 0.7) / P) * P);
-      const rowX = sx - rowW / 2;
+    ctx.fillStyle = `rgb(${cR},${cG},${cB})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, canopyCenter, t.canopyW / 2, t.canopyH / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
 
-      // Dark back layer
-      ctx.fillStyle = `rgb(${Math.max(0, cR - 12)},${Math.max(0, cG - 15)},${Math.max(0, cB - 8)})`;
-      ctx.fillRect(rowX - P, ry, rowW + P * 2, P);
+    // Canopy highlight
+    ctx.fillStyle = `rgba(${cR + 30},${cG + 20},${cB + 10}, 0.4)`;
+    ctx.beginPath();
+    ctx.ellipse(sx, canopyCenter - t.canopyH * 0.15, t.canopyW * 0.35, t.canopyH * 0.25, 0, 0, Math.PI * 2);
+    ctx.fill();
 
-      // Main canopy color
-      ctx.fillStyle = `rgb(${cR},${cG},${cB})`;
-      ctx.fillRect(rowX, ry, rowW, P);
+    // ── Platform highlight (so player can see where to land) ──
+    ctx.fillStyle = 'rgba(255, 255, 200, 0.15)';
+    ctx.fillRect(sx - t.canopyW / 2, trunkTop - t.canopyH, t.canopyW, P);
 
-      // Highlight pixels on top rows
-      if (row < rows * 0.4) {
-        ctx.fillStyle = `rgba(${Math.min(255, cR + 25)},${Math.min(255, cG + 20)},${Math.min(255, cB + 10)}, 0.4)`;
-        ctx.fillRect(rowX + P, ry, P * 2, P);
-      }
-    }
-
-    // Leaf detail pixels (scattered on canopy)
-    if (!t.burning) {
-      for (let d = 0; d < 6; d++) {
-        const dHash = (t.worldX * 31 + d * 719) & 0xFFF;
-        const dx = Math.round((sx + ((dHash % (canopyW | 1)) - canopyW / 2) * 0.6) / P) * P;
-        const dy = Math.round((canopyCenter + ((dHash >> 4) % (canopyH | 1) - canopyH / 2) * 0.4) / P) * P;
-        ctx.fillStyle = `rgba(${cR + 15},${cG + 20},${cB + 10}, 0.4)`;
-        ctx.fillRect(dx, dy, P, P);
-      }
-    }
-
-    // ── Platform highlight ──
-    ctx.fillStyle = 'rgba(255, 255, 200, 0.18)';
-    ctx.fillRect(sx - canopyW / 2, canopyTop, canopyW, P);
-
-    // ── Fire effects (pixel flames) ──
+    // ── Fire particles when burning ──
     if (t.burning) {
-      // Glow rect around canopy
-      ctx.globalAlpha = burnProg * 0.2;
-      ctx.fillStyle = '#ff4400';
-      ctx.fillRect(sx - canopyW / 2 - P * 2, canopyTop - P * 2, canopyW + P * 4, canopyH + P * 4);
-      ctx.globalAlpha = 1;
-
-      // Chunky flame pixels rising
-      const numFlames = Math.min(Math.floor(burnProg * 10) + 3, 12);
-      const fireColors = ['#ff4400', '#ff6600', '#ff8800', '#ffaa00', '#ffcc00', '#ffe060'];
+      const numFlames = Math.min(Math.floor(burnProg * 8) + 2, 8);
       for (let i = 0; i < numFlames; i++) {
-        const fHash = (t.worldX * 113 + i * 337 + frameCount * 7) & 0xFFF;
-        const fx = Math.round((sx + ((fHash % (canopyW | 1)) - canopyW / 2) * 0.6) / P) * P;
-        const fy = Math.round((canopyCenter + ((fHash >> 3) % (canopyH | 1) - canopyH / 2) * 0.4) / P) * P;
-        ctx.fillStyle = fireColors[fHash % fireColors.length];
-        ctx.globalAlpha = 0.6 + (fHash & 3) / 10;
-        const rise = Math.round(((frameCount * 2 + fHash) % 16) / P) * P;
-        ctx.fillRect(fx, fy - rise, P, P);
-        // Upward trail
-        if (i % 2 === 0) ctx.fillRect(fx, fy - rise - P, P, P);
-      }
-
-      // Smoke pixel blocks above
-      if (burnProg > 0.2) {
-        for (let s = 0; s < 3; s++) {
-          const sHash = (t.worldX * 53 + s * 491 + frameCount) & 0xFFF;
-          const smokeX = Math.round((sx + ((sHash % 30) - 15)) / P) * P;
-          const smokeY = Math.round((canopyTop - P * 3 - ((frameCount * 0.5 + sHash) % 30)) / P) * P;
-          const smokeA = Math.max(0, 0.15 - s * 0.04) * burnProg;
-          ctx.globalAlpha = smokeA;
-          ctx.fillStyle = '#443333';
-          const sw = P * (2 + s);
-          ctx.fillRect(smokeX, smokeY, sw, P);
-        }
+        const fx = sx + (Math.random() - 0.5) * t.canopyW * 0.8;
+        const fy = canopyCenter - t.canopyH * 0.3 + (Math.random() - 0.5) * t.canopyH * 0.6;
+        const fs = P + Math.random() * P;
+        const fireColors = ['#ff4400', '#ff6600', '#ff8800', '#ffaa00', '#ffcc00'];
+        ctx.fillStyle = fireColors[Math.random() * fireColors.length | 0];
+        ctx.globalAlpha = 0.6 + Math.random() * 0.4;
+        ctx.fillRect(fx - fs / 2, fy - fs - Math.random() * 8, fs, fs);
       }
       ctx.globalAlpha = 1;
     }
@@ -5899,139 +5592,82 @@ function drawHelpOverlay() {
 }
 
 function drawRocks() {
-  const P = 4;
   for (const r of rocks) {
-    const sx = Math.round((r.worldX - scrollOffset) / P) * P;
+    const sx = r.worldX - scrollOffset;
     if (sx < -50 || sx > W + 50) continue;
-    const groundY = Math.round(getGroundY(r.worldX) / P) * P;
-    const rad = Math.max(P * 2, Math.round(r.radius / P) * P);
-    const cy = groundY - rad;
-
-    // ── Pixel shadow ──
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-    ctx.fillRect(sx - rad + P, groundY, rad * 2 - P * 2, P);
-
-    // ── Rock body (pixel blob — rows of varying width) ──
-    const rows = rad * 2 / P;
-    for (let row = 0; row < rows; row++) {
-      const ry = cy - rad + row * P;
-      const t = row / (rows - 1); // 0→1
-      const widthFrac = t < 0.5 ? t * 2 : (1 - t) * 2;
-      const rowW = Math.max(P, Math.round(rad * 2 * (0.4 + widthFrac * 0.6) / P) * P);
-      const rowX = sx - rowW / 2;
-
-      // Two-tone: dark left, lighter right
-      const halfW = Math.max(P, rowW / 2);
-      ctx.fillStyle = '#5a4a3e';
-      ctx.fillRect(rowX, ry, halfW, P);
-      ctx.fillStyle = '#6b5b4f';
-      ctx.fillRect(rowX + halfW, ry, rowW - halfW, P);
-    }
-
-    // ── Edge pixels (outline) ──
-    ctx.fillStyle = '#3a2a1e';
-    ctx.fillRect(sx - rad, cy - rad, rad * 2, P); // top
-    ctx.fillRect(sx - rad, cy + rad - P, rad * 2, P); // bottom
-    ctx.fillRect(sx - rad, cy - rad, P, rad * 2); // left
-    ctx.fillRect(sx + rad - P, cy - rad, P, rad * 2); // right
-
-    // ── Crack pixels (diagonal line of dark pixels) ──
-    ctx.fillStyle = '#3a2a1e';
-    for (let c = 0; c < 4; c++) {
-      ctx.fillRect(sx - rad / 2 + c * P, cy - rad / 2 + c * P, P, P);
-    }
-    for (let c = 0; c < 3; c++) {
-      ctx.fillRect(sx + c * P, cy - rad / 2 + c * P, P, P);
-    }
-
-    // ── Highlight pixel ──
-    ctx.fillStyle = 'rgba(200, 190, 175, 0.35)';
-    ctx.fillRect(sx - P * 2, cy - P * 2, P, P);
-    ctx.fillRect(sx - P, cy - P * 2, P, P);
-    ctx.fillRect(sx - P * 2, cy - P, P, P);
-
-    // ── Speckle pixels ──
-    for (let s = 0; s < 4; s++) {
-      const sHash = (r.worldX * 71 + s * 311) & 0xFF;
-      const spx = Math.round((sx + ((sHash % (rad * 2 | 1)) - rad) * 0.5) / P) * P;
-      const spy = Math.round((cy + (((sHash >> 3) % (rad * 2 | 1)) - rad) * 0.5) / P) * P;
-      ctx.fillStyle = sHash % 2 === 0 ? 'rgba(90, 80, 70, 0.3)' : 'rgba(50, 40, 30, 0.25)';
-      ctx.fillRect(spx, spy, P, P);
-    }
+    const cy = getGroundY(r.worldX) - r.radius;
+    ctx.save();
+    ctx.translate(sx, cy);
+    ctx.rotate(r.rotation);
+    // Main body
+    ctx.beginPath();
+    ctx.arc(0, 0, r.radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#6b5b4f';
+    ctx.fill();
+    // Darker edge
+    ctx.strokeStyle = '#4a3a2e';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Crack lines
+    ctx.beginPath();
+    ctx.moveTo(-r.radius * 0.3, -r.radius * 0.2);
+    ctx.lineTo(r.radius * 0.1, r.radius * 0.3);
+    ctx.lineTo(r.radius * 0.4, r.radius * 0.1);
+    ctx.strokeStyle = '#4a3a2e';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(r.radius * 0.2, -r.radius * 0.5);
+    ctx.lineTo(-r.radius * 0.1, -r.radius * 0.1);
+    ctx.stroke();
+    // 3D highlight
+    ctx.beginPath();
+    ctx.arc(-r.radius * 0.25, -r.radius * 0.25, r.radius * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(180, 170, 155, 0.3)';
+    ctx.fill();
+    ctx.restore();
   }
 }
 
 function drawMoltenRocks() {
-  const P = 4;
   for (const mr of moltenRocks) {
-    const sx = Math.round((mr.worldX - scrollOffset) / P) * P;
+    const sx = mr.worldX - scrollOffset;
     if (sx < -50 || sx > W + 50) continue;
-    const groundY = Math.round(getGroundY(mr.worldX) / P) * P;
-    const rad = Math.max(P * 2, Math.round(mr.radius / P) * P);
-    const cy = groundY - rad;
-
-    // ── Ground heat glow (pixel rect) ──
-    const heatPulse = 0.3 + 0.2 * Math.sin(mr.glowPhase);
-    ctx.fillStyle = `rgba(255, 60, 10, ${heatPulse * 0.2})`;
-    ctx.fillRect(sx - rad * 2, groundY, rad * 4, P);
-
-    // ── Outer glow (concentric pixel rects) ──
-    const glowAlpha = 0.15 + 0.1 * Math.sin(mr.glowPhase);
-    ctx.fillStyle = `rgba(255, 60, 10, ${glowAlpha * 0.4})`;
-    ctx.fillRect(sx - rad - P * 2, cy - rad - P * 2, rad * 2 + P * 4, rad * 2 + P * 4);
-    ctx.fillStyle = `rgba(255, 100, 20, ${glowAlpha})`;
-    ctx.fillRect(sx - rad - P, cy - rad - P, rad * 2 + P * 2, rad * 2 + P * 2);
-
-    // ── Body (pixel blob with color bands — hot core to dark crust) ──
-    const rows = rad * 2 / P;
-    const bodyColors = ['#551100', '#cc3300', '#ff8800', '#ffcc00', '#ffffaa', '#ffcc00', '#ff8800', '#cc3300', '#551100'];
-    for (let row = 0; row < rows; row++) {
-      const ry = cy - rad + row * P;
-      const t = row / (rows - 1);
-      const widthFrac = t < 0.5 ? t * 2 : (1 - t) * 2;
-      const rowW = Math.max(P, Math.round(rad * 2 * (0.4 + widthFrac * 0.6) / P) * P);
-      const rowX = sx - rowW / 2;
-      // Pick color band based on distance from center
-      const distFromCenter = Math.abs(t - 0.5) * 2; // 0=center, 1=edge
-      const colorIdx = Math.min(bodyColors.length - 1, Math.floor(distFromCenter * (bodyColors.length - 1)));
-      ctx.fillStyle = bodyColors[colorIdx];
-      ctx.fillRect(rowX, ry, rowW, P);
-    }
-
-    // ── Dark crust patches (pixel blocks) ──
-    ctx.fillStyle = 'rgba(40, 15, 5, 0.5)';
-    for (let p = 0; p < 3; p++) {
-      const pH = (mr.worldX * 53 + p * 719) & 0xFF;
-      const px = Math.round((sx + ((pH % (rad | 1)) - rad / 2) * 0.5) / P) * P;
-      const py = Math.round((cy + (((pH >> 3) % (rad | 1)) - rad / 2) * 0.5) / P) * P;
-      ctx.fillRect(px, py, P, P);
-    }
-
-    // ── Lava crack pixels (glowing, animated) ──
-    const crackPulse = 0.6 + 0.4 * Math.sin(mr.glowPhase * 1.5);
-    ctx.fillStyle = `rgba(255, 220, 50, ${crackPulse})`;
-    // Diagonal crack line
-    for (let c = 0; c < 4; c++) {
-      ctx.fillRect(sx - rad / 2 + c * P, cy - P + c * P, P, P);
-    }
-    // Cross crack
-    for (let c = 0; c < 3; c++) {
-      ctx.fillRect(sx + P + c * P, cy - rad / 2 + c * P, P, P);
-    }
-
-    // ── Hot spot pixel ──
-    ctx.fillStyle = 'rgba(255, 255, 200, 0.35)';
-    ctx.fillRect(sx - P, cy - P, P, P);
-
-    // ── Trailing spark pixels ──
-    for (let sp = 0; sp < 3; sp++) {
-      const spHash = (mr.worldX * 37 + sp * 523 + frameCount * 3) & 0xFFF;
-      const sparkX = Math.round((sx - P - (spHash % 12)) / P) * P;
-      const sparkY = Math.round((cy - P + ((spHash >> 3) % 8) - 4) / P) * P;
-      const sparkA = 0.4 + (spHash & 7) / 20;
-      ctx.fillStyle = `rgba(255, ${150 + spHash % 80}, 30, ${sparkA})`;
-      ctx.fillRect(sparkX, sparkY, P, P);
-    }
+    const cy = getGroundY(mr.worldX) - mr.radius;
+    ctx.save();
+    ctx.translate(sx, cy);
+    ctx.rotate(mr.rotation);
+    // Glow effect
+    const glowIntensity = 10 + Math.sin(mr.glowPhase) * 6;
+    ctx.shadowColor = '#ff6600';
+    ctx.shadowBlur = glowIntensity;
+    // Main body — radial gradient
+    const grad = ctx.createRadialGradient(0, 0, mr.radius * 0.1, 0, 0, mr.radius);
+    grad.addColorStop(0, '#ffaa00');
+    grad.addColorStop(0.5, '#cc4400');
+    grad.addColorStop(1, '#661100');
+    ctx.beginPath();
+    ctx.arc(0, 0, mr.radius, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    // Lava crack lines
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-mr.radius * 0.4, -mr.radius * 0.1);
+    ctx.lineTo(mr.radius * 0.05, mr.radius * 0.35);
+    ctx.lineTo(mr.radius * 0.35, mr.radius * 0.05);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mr.radius * 0.15, -mr.radius * 0.45);
+    ctx.lineTo(-mr.radius * 0.15, -mr.radius * 0.05);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-mr.radius * 0.1, mr.radius * 0.2);
+    ctx.lineTo(mr.radius * 0.3, mr.radius * 0.35);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -6059,11 +5695,8 @@ function draw() {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (level === 4) {
       drawDestroyedCitySky();
-      // When bg image is loaded, it already has far/mid ruins — only draw near for parallax depth
-      if (!level2BgReady) {
-        drawRuinsLayer(ruins_far, 0.1, 0, false);
-        drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
-      }
+      drawRuinsLayer(ruins_far, 0.1, 0, false);
+      drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
       drawRuinsLayer(ruins_near, 0.8, 0.1, true);
     } else {
       drawNeoTokyoSky();
@@ -6112,35 +5745,6 @@ function draw() {
       ctx.fillRect(p.x - sz * 0.5, p.y - sz * 0.5, sz, sz);
     }
     ctx.globalAlpha = 1;
-
-    // ── Level 4 atmospheric post-processing (pixel-style) ──
-    if (level === 4) {
-      const P = 4;
-      // Warm color wash
-      ctx.globalAlpha = 0.04 + 0.015 * Math.sin(frameCount * 0.008);
-      ctx.fillStyle = '#ff4400';
-      ctx.fillRect(0, 0, W, H);
-      ctx.globalAlpha = 1;
-
-      // Pixel vignette — stepped opacity bands (no gradients)
-      ctx.fillStyle = 'rgba(10, 3, 0, 0.35)';
-      ctx.fillRect(0, 0, P * 4, H);             // left edge
-      ctx.fillRect(W - P * 4, 0, P * 4, H);     // right edge
-      ctx.fillRect(0, 0, W, P * 4);             // top edge
-      ctx.fillStyle = 'rgba(10, 3, 0, 0.2)';
-      ctx.fillRect(P * 4, 0, P * 6, H);         // left fade
-      ctx.fillRect(W - P * 10, 0, P * 6, H);   // right fade
-      ctx.fillRect(0, P * 4, W, P * 4);         // top fade
-      ctx.fillStyle = 'rgba(10, 3, 0, 0.08)';
-      ctx.fillRect(P * 10, 0, P * 8, H);        // left outer
-      ctx.fillRect(W - P * 18, 0, P * 8, H);   // right outer
-
-      // Bottom heat glow (stepped bands)
-      ctx.fillStyle = 'rgba(80, 20, 5, 0.15)';
-      ctx.fillRect(0, H - P * 8, W, P * 8);
-      ctx.fillStyle = 'rgba(80, 20, 5, 0.08)';
-      ctx.fillRect(0, H - P * 16, W, P * 8);
-    }
 
     drawHUD();
     if (creditsTimer > 0) drawCreditsOverlay();
