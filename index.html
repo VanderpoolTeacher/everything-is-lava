@@ -2669,6 +2669,11 @@ function update() {
       playMoltenSizzle();
     }
 
+    // Periodic sizzle SFX for molten rocks
+    if (moltenRocks.length > 0 && frameCount % 30 === 0) {
+      playMoltenSizzle();
+    }
+
     for (let i = moltenRocks.length - 1; i >= 0; i--) {
       const mr = moltenRocks[i];
       mr.worldX -= mr.speed;
