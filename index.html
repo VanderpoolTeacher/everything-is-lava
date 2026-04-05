@@ -160,6 +160,7 @@ let volumeDisplayTimer = 0;
 function applyMasterVolume() {
   const v = muted ? 0 : masterVolume;
   levelMusic.volume = 0.5 * v;
+  volcanoMusic.volume = 0.5 * v;
   dojoTracks.forEach(t => { t.volume = 0.4 * v; });
   titleMusic.volume = 0.4 * v;
   gameOverMusic.volume = 0.6 * v;
@@ -172,7 +173,25 @@ function applyMasterVolume() {
 const levelMusic = new Audio('assets/music/neo-tokyo-level-1.mp3');
 levelMusic.loop = true;
 levelMusic.volume = 0.5;
+const volcanoMusic = new Audio('assets/music/volcano-climb.mp3');
+volcanoMusic.loop = true;
+volcanoMusic.volume = 0.5;
 let musicStarted = false;
+
+function getCurrentMusic() {
+  return level === 4 ? volcanoMusic : levelMusic;
+}
+function stopAllLevelMusic() {
+  levelMusic.pause(); levelMusic.currentTime = 0;
+  volcanoMusic.pause(); volcanoMusic.currentTime = 0;
+}
+function playCurrentMusic() {
+  const m = getCurrentMusic();
+  const v = muted ? 0 : masterVolume;
+  m.volume = 0.5 * v;
+  m.currentTime = 0;
+  m.play().catch(() => {});
+}
 
 const dojoTracks = [
   new Audio('assets/music/dojo-training.mp3'),
@@ -633,6 +652,225 @@ function playDeathSound() {
   } catch(e) {}
 }
 
+// ── LEVEL 2 SFX (Web Audio API) ──
+
+// Rock bounce — deep stone thud with gravel scatter
+function playRockBounce(size) {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * (size === 'large' ? 0.6 : 0.45);
+    const freq = size === 'large' ? 60 : 90;
+    // Deep impact thud
+    const osc = ac.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(20, now + 0.15);
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    autoCleanup(osc, [osc, gain]);
+    osc.start(now);
+    osc.stop(now + 0.2);
+    // Gravel scatter — short noise burst
+    const noise = ac.createBufferSource();
+    noise.buffer = getCrunchBuf(ac);
+    const nGain = ac.createGain();
+    nGain.gain.setValueAtTime(vol * 0.5, now);
+    nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    const nFilter = ac.createBiquadFilter();
+    nFilter.type = 'highpass';
+    nFilter.frequency.value = 800;
+    noise.connect(nFilter);
+    nFilter.connect(nGain);
+    nGain.connect(ac.destination);
+    autoCleanup(noise, [noise, nFilter, nGain]);
+    noise.start(now);
+  } catch(e) {}
+}
+
+// Rock hits player — heavy slam with crunch
+function playRockHit() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.7;
+    // Meaty impact
+    const osc = ac.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    autoCleanup(osc, [osc, gain]);
+    osc.start(now);
+    osc.stop(now + 0.15);
+    // Crunch layer
+    const crunch = ac.createBufferSource();
+    crunch.buffer = getCrunchBuf(ac);
+    const cGain = ac.createGain();
+    cGain.gain.setValueAtTime(vol * 0.6, now);
+    cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    const cFilter = ac.createBiquadFilter();
+    cFilter.type = 'bandpass';
+    cFilter.frequency.value = 600;
+    cFilter.Q.value = 2;
+    crunch.connect(cFilter);
+    cFilter.connect(cGain);
+    cGain.connect(ac.destination);
+    autoCleanup(crunch, [crunch, cFilter, cGain]);
+    crunch.start(now);
+    // Oof sub-bass punch
+    const sub = ac.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(100, now);
+    sub.frequency.exponentialRampToValueAtTime(30, now + 0.08);
+    const subGain = ac.createGain();
+    subGain.gain.setValueAtTime(vol * 0.8, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    sub.connect(subGain);
+    subGain.connect(ac.destination);
+    autoCleanup(sub, [sub, subGain]);
+    sub.start(now);
+    sub.stop(now + 0.1);
+  } catch(e) {}
+}
+
+// Molten rock sizzle — crackling lava hiss (one-shot, call periodically)
+let _sizzleBuf = null;
+function getSizzleBuf(ac) {
+  if (_sizzleBuf) return _sizzleBuf;
+  const len = Math.floor(ac.sampleRate * 0.5);
+  _sizzleBuf = ac.createBuffer(1, len, ac.sampleRate);
+  const data = _sizzleBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const t = i / len;
+    const env = Math.sin(t * Math.PI); // fade in and out
+    // Crackling: random pops mixed with hiss
+    const pop = Math.random() > 0.92 ? (Math.random() * 2 - 1) * 3 : 0;
+    data[i] = ((Math.random() * 2 - 1) * 0.3 + pop) * env;
+  }
+  return _sizzleBuf;
+}
+function playMoltenSizzle() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.3;
+    const src = ac.createBufferSource();
+    src.buffer = getSizzleBuf(ac);
+    const filter = ac.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 2000 + Math.random() * 1500;
+    filter.Q.value = 1.5;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.linearRampToValueAtTime(vol * 0.7, now + 0.25);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ac.destination);
+    autoCleanup(src, [src, filter, gain]);
+    src.start(now);
+  } catch(e) {}
+}
+
+// Tree burning — crackling fire with rising pitch
+let _fireBuf = null;
+function getFireBuf(ac) {
+  if (_fireBuf) return _fireBuf;
+  const len = Math.floor(ac.sampleRate * 0.6);
+  _fireBuf = ac.createBuffer(1, len, ac.sampleRate);
+  const data = _fireBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const t = i / len;
+    // Dense crackling — random pops at varying density
+    const crackle = Math.random() > (0.85 - t * 0.15) ? (Math.random() * 2 - 1) : 0;
+    const hiss = (Math.random() * 2 - 1) * 0.2;
+    data[i] = (crackle * 0.7 + hiss) * Math.min(1, t * 5) * (1 - t * 0.3);
+  }
+  return _fireBuf;
+}
+function playTreeBurn() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.35;
+    const src = ac.createBufferSource();
+    src.buffer = getFireBuf(ac);
+    const filter = ac.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1200, now);
+    filter.frequency.linearRampToValueAtTime(2500, now + 0.5);
+    filter.Q.value = 0.8;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(vol, now + 0.1);
+    gain.gain.setValueAtTime(vol, now + 0.4);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ac.destination);
+    autoCleanup(src, [src, filter, gain]);
+    src.start(now);
+  } catch(e) {}
+}
+
+// Tree collapse — heavy timber crack + ground thud
+function playTreeCollapse() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.5;
+    // Sharp crack
+    const crack = ac.createBufferSource();
+    crack.buffer = getCrackBuf(ac);
+    const crackGain = ac.createGain();
+    crackGain.gain.setValueAtTime(vol, now);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    crack.connect(crackGain);
+    crackGain.connect(ac.destination);
+    autoCleanup(crack, [crack, crackGain]);
+    crack.start(now);
+    // Delayed ground thud
+    const thud = ac.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(80, now + 0.15);
+    thud.frequency.exponentialRampToValueAtTime(25, now + 0.4);
+    const thudGain = ac.createGain();
+    thudGain.gain.setValueAtTime(0, now);
+    thudGain.gain.setValueAtTime(vol * 0.7, now + 0.15);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+    thud.connect(thudGain);
+    thudGain.connect(ac.destination);
+    autoCleanup(thud, [thud, thudGain]);
+    thud.start(now);
+    thud.stop(now + 0.45);
+    // Creaking groan
+    const groan = ac.createOscillator();
+    groan.type = 'sawtooth';
+    groan.frequency.setValueAtTime(180, now);
+    groan.frequency.linearRampToValueAtTime(60, now + 0.3);
+    const groanFilter = ac.createBiquadFilter();
+    groanFilter.type = 'lowpass';
+    groanFilter.frequency.value = 300;
+    const groanGain = ac.createGain();
+    groanGain.gain.setValueAtTime(vol * 0.15, now);
+    groanGain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    groan.connect(groanFilter);
+    groanFilter.connect(groanGain);
+    groanGain.connect(ac.destination);
+    autoCleanup(groan, [groan, groanFilter, groanGain]);
+    groan.start(now);
+    groan.stop(now + 0.35);
+  } catch(e) {}
+}
+
 // ── PLAYER ──
 const SPRITE_W = 72;
 const SPRITE_H = 76;
@@ -909,9 +1147,10 @@ function generateTrees() {
   trees = [];
   let lastWasTall = false;
   for (let wx = 150; wx < 10000; ) {
-    // Trees become more sparse as the level progresses
+    // Trees become more sparse as the level progresses, heavily thinned in last third
     const progress = wx / 10000; // 0 at start, 1 at end
-    const spacing = TREE_SPACING + progress * 350 + Math.random() * 60;
+    const lastThirdBonus = progress > 0.67 ? (progress - 0.67) * 1500 : 0;
+    const spacing = TREE_SPACING + progress * 350 + lastThirdBonus + Math.random() * 60;
     wx += spacing;
     let sizeRoll = Math.random();
     let size;
@@ -1313,7 +1552,7 @@ window.addEventListener('keydown', e => {
       konamiActive = false;
       konamiUsed = true;
       // Stop all audio
-      levelMusic.pause(); levelMusic.currentTime = 0;
+      stopAllLevelMusic();
       titleMusic.pause(); titleMusic.currentTime = 0;
       gameOverMusic.pause(); gameOverMusic.currentTime = 0;
       victoryMusic.pause(); victoryMusic.currentTime = 0;
@@ -1354,8 +1593,7 @@ window.addEventListener('keydown', e => {
       }
       gameState = 'playing';
       musicStarted = true;
-      levelMusic.currentTime = 0;
-      levelMusic.play().catch(() => {});
+      playCurrentMusic();
       return;
     }
     // S key — jump to story scroll (end of 1-3)
@@ -1363,7 +1601,7 @@ window.addEventListener('keydown', e => {
       konamiActive = false;
       konamiUsed = true;
       // Stop all audio
-      levelMusic.pause(); levelMusic.currentTime = 0;
+      stopAllLevelMusic();
       titleMusic.pause(); titleMusic.currentTime = 0;
       gameOverMusic.pause(); gameOverMusic.currentTime = 0;
       dojoTracks.forEach(t => { t.pause(); t.currentTime = 0; });
@@ -1403,11 +1641,12 @@ window.addEventListener('keydown', e => {
     return; // absorb this input — just start the music
   }
 
-  // ── G-G-D / O-G sequence detection on menu screen ──
+  // ── G-G-D / O-G / S-F-X sequence detection on menu screen ──
   if (gameState === 'menu') {
     const key = e.code;
-    if (key === 'KeyG' || key === 'KeyD' || key === 'KeyO') {
-      dojoKeyBuffer += key === 'KeyG' ? 'g' : key === 'KeyD' ? 'd' : 'o';
+    const letter = key.length === 4 && key.startsWith('Key') ? key[3].toLowerCase() : null;
+    if (letter) {
+      dojoKeyBuffer += letter;
       dojoKeyTimer = 60; // reset timeout
       if (dojoKeyBuffer.endsWith('ggd')) {
         enterDojo();
@@ -1417,6 +1656,11 @@ window.addEventListener('keydown', e => {
       if (dojoKeyBuffer.endsWith('og')) {
         dojoKeyBuffer = '';
         window.location.href = 'index-og.html';
+        return;
+      }
+      if (dojoKeyBuffer.endsWith('sfx')) {
+        enterSfxScreen();
+        dojoKeyBuffer = '';
         return;
       }
       // Keep only last 3 chars
@@ -1448,6 +1692,46 @@ window.addEventListener('keydown', e => {
     } else {
       jumpBuffered = true;
     }
+  }
+
+  // ── SFX screen controls ──
+  if (gameState === 'sfx') {
+    if (e.code === 'Escape') {
+      exitSfxScreen();
+      return;
+    }
+    if (e.code === 'ArrowUp' || e.code === 'KeyW') {
+      e.preventDefault();
+      sfxSelectedIndex = (sfxSelectedIndex - 1 + SFX_LIST.length) % SFX_LIST.length;
+      return;
+    }
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+      e.preventDefault();
+      sfxSelectedIndex = (sfxSelectedIndex + 1) % SFX_LIST.length;
+      return;
+    }
+    if (e.code === 'Space' || e.code === 'Enter') {
+      e.preventDefault();
+      SFX_LIST[sfxSelectedIndex].play();
+      sfxPlayingName = SFX_LIST[sfxSelectedIndex].name;
+      sfxPlayingTimer = 40;
+      return;
+    }
+    // Number key shortcuts (0-9) and letter shortcuts (Q/W/E/R)
+    for (let i = 0; i < SFX_LIST.length; i++) {
+      const k = SFX_LIST[i].key;
+      const match = k.length === 1 && k >= '0' && k <= '9'
+        ? e.code === 'Digit' + k
+        : e.code === 'Key' + k;
+      if (match) {
+        sfxSelectedIndex = i;
+        SFX_LIST[i].play();
+        sfxPlayingName = SFX_LIST[i].name;
+        sfxPlayingTimer = 40;
+        return;
+      }
+    }
+    return; // absorb all other keys on SFX screen
   }
 
   // Escape exits dojo back to menu
@@ -1575,8 +1859,7 @@ function clearGameState() {
   stopPoliceSiren();
   stopBusScream();
   stopBuzz();
-  levelMusic.pause();
-  levelMusic.currentTime = 0;
+  stopAllLevelMusic();
   gameOverMusic.pause();
   gameOverMusic.currentTime = 0;
   victoryMusic.pause();
@@ -1611,8 +1894,7 @@ function startGame() {
   titleMusic.currentTime = 0;
   if (level === 1) {
     // Fresh game — silence level music
-    levelMusic.pause();
-    levelMusic.currentTime = 0;
+    stopAllLevelMusic();
   }
   // Level music keeps playing through level transitions
   gameOverMusic.pause();
@@ -1693,10 +1975,11 @@ function respawnPlayer() {
   // Clear immediate threats near player
   lavaDrops = [];
   warningMarkers = [];
-  // Restore music volume (respect master volume)
+  // Restore music volume and resume (respect master volume)
   const v = muted ? 0 : masterVolume;
-  levelMusic.volume = 0.5 * v;
-  levelMusic.play().catch(() => {});
+  const curMusic = getCurrentMusic();
+  curMusic.volume = 0.5 * v;
+  curMusic.play().catch(() => {});
 }
 
 // ── UPDATE ──
@@ -1714,7 +1997,7 @@ function update() {
     villageProgress = Math.min(1, (levelTimer - (levelDuration - VILLAGE_LEAD_IN)) / VILLAGE_LEAD_IN);
     // Fade music as village approaches
     const v = muted ? 0 : masterVolume;
-    levelMusic.volume = 0.5 * v * (1 - villageProgress * 0.85); // fades to 15% volume
+    getCurrentMusic().volume = 0.5 * v * (1 - villageProgress * 0.85); // fades to 15% volume
   } else {
     villageProgress = 0;
   }
@@ -1724,8 +2007,7 @@ function update() {
     if (!konamiUsed) score += level * 1000;
     if (level >= 4) {
       // Stop all gameplay audio
-      levelMusic.pause();
-      levelMusic.currentTime = 0;
+      stopAllLevelMusic();
       stopSiren();
       stopPoliceSiren();
       stopBusScream();
@@ -2091,7 +2373,8 @@ function update() {
     if (player.grounded || player.vy > 0) {
       const px = player.x + player.w / 2;
       const py = player.y + player.h;
-      if (px > screenX - p.w / 2 + 6 && px < screenX + p.w / 2 - 6 && py >= GROUND_Y - 4) {
+      const poolGroundY = getGroundY(p.worldX);
+      if (px > screenX - p.w / 2 + 6 && px < screenX + p.w / 2 - 6 && py >= poolGroundY - 8) {
         die();
         return;
       }
@@ -2110,6 +2393,7 @@ function update() {
         const dsx = d.worldX - scrollOffset;
         if (Math.abs(dsx - tsx) < t.canopyW / 2 + 10 && d.y >= treeTop && d.y <= baseY) {
           t.burning = true;
+          playTreeBurn();
           break;
         }
       }
@@ -2119,6 +2403,7 @@ function update() {
           const psx = p.worldX - scrollOffset;
           if (Math.abs(psx - tsx) < (p.w / 2 + t.trunkW / 2)) {
             t.burning = true;
+            playTreeBurn();
             break;
           }
         }
@@ -2133,6 +2418,7 @@ function update() {
         t.burnTimer++;
         if (t.burnTimer >= 210) {
           t.collapsed = true;
+          playTreeCollapse();
           // Ember particles
           const tsx = t.worldX - scrollOffset;
           const baseY = getGroundY(t.worldX);
@@ -2172,6 +2458,7 @@ function update() {
         r.bounceY = 0;
         if (Math.abs(r.vy) > 0.8) {
           r.vy = -Math.abs(r.vy) * r.bounceDamping;
+          playRockBounce(r.size);
         } else {
           r.vy = 0;
         }
@@ -2181,8 +2468,8 @@ function update() {
         rocks.splice(i, 1);
         continue;
       }
-      // Player collision — knockback only, no kill
-      if (!player.invincible) {
+      // Player collision — knockback only, no kill, no invincibility
+      if (!r.hitCooldown) {
         const sx = r.worldX - scrollOffset;
         const cy = getGroundY(r.worldX) - r.radius + (r.bounceY || 0);
         const px = player.x + player.w / 2;
@@ -2193,10 +2480,13 @@ function update() {
         if (dist < r.radius + player.w / 3) {
           player.x -= r.knockback;
           if (player.x < 0) player.x = 0;
-          player.invincible = 20;
+          r.hitCooldown = 15; // prevent same rock multi-hitting
           shakeTimer = 8;
           spawnParticles(sx, cy, '#8b7355', 8, 4);
+          playRockHit();
         }
+      } else {
+        r.hitCooldown--;
       }
     }
   }
@@ -2210,6 +2500,11 @@ function update() {
       if (progress < 0.75) moltenRate = 200;
       else moltenRate = 120;
       if ((levelTimer + 50) % moltenRate === 0) spawnMoltenRock();
+    }
+
+    // Periodic sizzle SFX for molten rocks
+    if (moltenRocks.length > 0 && frameCount % 30 === 0) {
+      playMoltenSizzle();
     }
 
     for (let i = moltenRocks.length - 1; i >= 0; i--) {
@@ -2481,13 +2776,13 @@ function die() {
     // True game over — show scrolling legend
     gameState = 'gameover';
     gameOverScrollDone = false;
-    levelMusic.pause();
+    getCurrentMusic().pause();
     gameOverMusic.currentTime = 0;
     gameOverMusic.play().catch(() => {});
   } else {
     // Still have lives — brief death, then respawn
     gameState = 'dead';
-    levelMusic.volume = 0.25 * (muted ? 0 : masterVolume); // dim music during death
+    getCurrentMusic().volume = 0.25 * (muted ? 0 : masterVolume); // dim music during death
   }
 }
 
@@ -2525,6 +2820,138 @@ function enterDojo() {
   dojoTrialOn = false;
   dojoTrialTimer = 0;
   dojoTrialScore = 0;
+}
+
+// ── SFX PREVIEW SCREEN ──
+let sfxSelectedIndex = 0;
+let sfxPlayingTimer = 0; // visual feedback timer
+let sfxPlayingName = ''; // name of currently playing SFX
+const SFX_LIST = [
+  { name: 'LAVA SPLASH',     key: '1', play: () => playLavaSplash() },
+  { name: 'LAVA HIT',        key: '2', play: () => playLavaHit() },
+  { name: 'DEATH',            key: '3', play: () => playDeathSound() },
+  { name: 'ROCK BOUNCE (M)', key: '4', play: () => playRockBounce('medium') },
+  { name: 'ROCK BOUNCE (L)', key: '5', play: () => playRockBounce('large') },
+  { name: 'ROCK HIT',        key: '6', play: () => playRockHit() },
+  { name: 'MOLTEN SIZZLE',   key: '7', play: () => playMoltenSizzle() },
+  { name: 'TREE BURN',       key: '8', play: () => playTreeBurn() },
+  { name: 'TREE COLLAPSE',   key: '9', play: () => playTreeCollapse() },
+  { name: 'EXPLOSION',       key: '0', play: () => playExplosionSound() },
+  { name: 'SIREN',            key: 'Q', play: () => { stopSiren(); startSiren(); } },
+  { name: 'POLICE SIREN',    key: 'W', play: () => { stopPoliceSiren(); startPoliceSiren(); } },
+  { name: 'BUS SCREAM',      key: 'E', play: () => { stopBusScream(); startBusScream(); } },
+  { name: 'BUZZ',             key: 'R', play: () => { stopBuzz(); startBuzz(); } },
+];
+
+function enterSfxScreen() {
+  gameState = 'sfx';
+  titleMusic.pause();
+  titleMusic.currentTime = 0;
+  sfxSelectedIndex = 0;
+  sfxPlayingTimer = 0;
+  sfxPlayingName = '';
+}
+
+function exitSfxScreen() {
+  // Stop any continuous SFX that might still be playing
+  stopSiren(); stopPoliceSiren(); stopBusScream(); stopBuzz();
+  gameState = 'menu';
+  menuScrollY = -480;
+  titleMusic.currentTime = 0;
+  titleMusic.play().catch(() => {});
+}
+
+function drawSfxScreen() {
+  // Dark background
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Scanline overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  for (let y = 0; y < H; y += 4) {
+    ctx.fillRect(0, y, W, 2);
+  }
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff6600';
+  ctx.font = `bold 20px ${GAME_FONT}`;
+  ctx.shadowColor = '#ff4400';
+  ctx.shadowBlur = 20;
+  ctx.fillText('SFX PREVIEW', W / 2, 45);
+  ctx.shadowBlur = 0;
+
+  // "Now playing" banner — shows name of selected SFX
+  const currentName = SFX_LIST[sfxSelectedIndex].name;
+  if (sfxPlayingTimer > 0) {
+    // Pulsing glow when actively playing
+    const pulse = Math.sin(sfxPlayingTimer * 0.3) * 0.3 + 0.7;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ff4400';
+    ctx.font = `bold 14px ${GAME_FONT}`;
+    ctx.fillText('♪  ' + sfxPlayingName + '  ♪', W / 2, 75);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = '#ffddbb';
+    ctx.font = `bold 14px ${GAME_FONT}`;
+    ctx.fillText(currentName, W / 2, 75);
+  }
+
+  // Subtitle controls
+  ctx.fillStyle = '#556677';
+  ctx.font = `8px ${GAME_FONT}`;
+  ctx.fillText('↑↓ Select  ·  SPACE Play  ·  ESC Exit', W / 2, 95);
+
+  // List of SFX
+  const startY = 115;
+  const rowH = 26;
+  const listX = W / 2;
+
+  for (let i = 0; i < SFX_LIST.length; i++) {
+    const sfx = SFX_LIST[i];
+    const y = startY + i * rowH;
+    const selected = i === sfxSelectedIndex;
+    const justPlayed = selected && sfxPlayingTimer > 0;
+
+    // Selection highlight bar
+    if (selected) {
+      const barAlpha = justPlayed ? 0.35 : 0.15;
+      const barColor = justPlayed ? 'rgba(255,102,0,' + barAlpha + ')' : 'rgba(255,170,100,' + barAlpha + ')';
+      ctx.fillStyle = barColor;
+      const barW = 340;
+      ctx.fillRect(listX - barW / 2, y - 8, barW, rowH - 4);
+
+      // Selection arrow
+      ctx.fillStyle = '#ff6600';
+      ctx.font = `10px ${GAME_FONT}`;
+      ctx.textAlign = 'right';
+      ctx.fillText('▶', listX - 145, y + 5);
+    }
+
+    // Key shortcut
+    ctx.textAlign = 'left';
+    ctx.fillStyle = selected ? '#ffcc00' : '#556677';
+    ctx.font = `bold 8px ${GAME_FONT}`;
+    ctx.fillText('[' + sfx.key + ']', listX - 130, y + 5);
+
+    // SFX name
+    ctx.fillStyle = selected ? (justPlayed ? '#ff8844' : '#ffddbb') : '#8899aa';
+    ctx.font = `9px ${GAME_FONT}`;
+    ctx.fillText(sfx.name, listX - 95, y + 5);
+
+    // Playing indicator
+    if (justPlayed) {
+      ctx.fillStyle = '#ff6600';
+      ctx.font = `bold 8px ${GAME_FONT}`;
+      ctx.textAlign = 'right';
+      ctx.fillText('♪', listX + 155, y + 5);
+    }
+  }
+
+  ctx.textAlign = 'left';
+
+  // Decrement playing timer
+  if (sfxPlayingTimer > 0) sfxPlayingTimer--;
 }
 
 function updateDojo() {
@@ -5332,7 +5759,7 @@ function drawMenu() {
     ctx.fillText('A/D  ·  Space  ·  Double jump  ·  Dodge the lava!', W / 2, H - 25);
     ctx.fillStyle = '#556677';
     ctx.font = `9px ${GAME_FONT}`;
-    ctx.fillText('Type GGD to enter the Dojo  ·  Type OG for the original', W / 2, H - 10);
+    ctx.fillText('Type GGD to enter the Dojo  ·  Type OG for the original  ·  Type SFX', W / 2, H - 10);
     ctx.globalAlpha = 1;
   }
 
@@ -6319,6 +6746,8 @@ function draw() {
     drawTransition();
   } else if (gameState === 'dojo') {
     drawDojo();
+  } else if (gameState === 'sfx') {
+    drawSfxScreen();
   } else {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (level === 4) {
@@ -6504,9 +6933,9 @@ function gameTick() {
     if (transitionTimer <= 0) {
       gameState = 'playing';
       // Only restart music if it's not already playing (fresh game)
-      if (levelMusic.paused) {
-        levelMusic.currentTime = 0;
-        levelMusic.play().catch(() => {});
+      const curM = getCurrentMusic();
+      if (curM.paused) {
+        playCurrentMusic();
       }
     }
   }
