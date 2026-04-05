@@ -54,18 +54,20 @@ const GRAVITY = 0.55;
 const JUMP_FORCE = -11.5;
 const GROUND_Y = H - 60; // street level
 
-function getGroundY(worldX) {
-  if (level !== 4) return GROUND_Y;
-  // Level 4 (2-1): ground slopes upward the entire time.
-  // The slope is relative to the current screen so it looks consistent
-  // throughout the level — the camera "climbs" with the player.
-  const progress = Math.min(1, levelTimer / levelDuration); // 0→1 over the level
-  const slope = 0.05 + progress * 0.10; // rise/run ratio — starts 5%, grows to 15%
+function isVolcanoLevel() { return level >= 4; }
 
-  // screenX: position on screen (0 = left edge, W = right edge)
+function getGroundY(worldX) {
+  if (!isVolcanoLevel()) return GROUND_Y;
+  const progress = Math.min(1, levelTimer / levelDuration);
+  let slope;
+  if (level === 5) {
+    // Level 2-2: steep slope, 15% → 45%
+    slope = 0.15 + progress * 0.30;
+  } else {
+    // Level 2-1: gentle slope, 5% → 15%
+    slope = 0.05 + progress * 0.10;
+  }
   const screenX = worldX - scrollOffset;
-  // Player is at ~150px on screen. Ground at player stays at GROUND_Y.
-  // Ground to the right of the player is higher (lower Y), left is lower (higher Y).
   const playerScreenX = 150;
   const rise = (screenX - playerScreenX) * slope;
   return GROUND_Y - rise;
@@ -179,7 +181,7 @@ volcanoMusic.volume = 0.5;
 let musicStarted = false;
 
 function getCurrentMusic() {
-  return level === 4 ? volcanoMusic : levelMusic;
+  return isVolcanoLevel() ? volcanoMusic : levelMusic;
 }
 function stopAllLevelMusic() {
   levelMusic.pause(); levelMusic.currentTime = 0;
@@ -932,15 +934,23 @@ function spawnRock() {
 // ── MOLTEN ROCKS (Level 4) ──
 let moltenRocks = [];
 
-function spawnMoltenRock() {
-  // Large molten rocks only
-  let radius = 38, speed = 0.6 + Math.random() * 0.4;
+function spawnMoltenRock(forceSmall) {
+  const small = forceSmall || (level === 5 && Math.random() < 0.5);
+  let radius, speed;
+  if (small) {
+    radius = 18 + Math.random() * 8; // 18-26px
+    speed = 1.0 + Math.random() * 0.6; // faster than large
+  } else {
+    radius = 38;
+    speed = 0.6 + Math.random() * 0.4;
+  }
   const spawnX = scrollOffset + W + 50;
   moltenRocks.push({
     worldX: spawnX,
     originX: spawnX,
     radius: radius,
     speed: speed,
+    size: small ? 'small' : 'large',
     rotation: 0,
     rotationSpeed: -(0.018 + Math.random() * 0.012),
     vy: 0,
@@ -1141,7 +1151,7 @@ function generateStreetLamps() {
 //   'mid'   — on ground layer with player, has platforms
 //   'front' — in front of player, slightly larger/darker, no platforms
 let trees = [];
-const TREE_SPACING = 250; // tighter spacing since split across 3 layers
+const TREE_SPACING = 350; // spacing between trees across 3 layers
 
 function generateTrees() {
   trees = [];
@@ -1187,12 +1197,121 @@ function generateTrees() {
   }
 }
 
+// ── LAVA CRACKS & POOLS (Level 2-2 ground hazards) ──
+let lavaPits = []; // array of crack objects
+
+function generateLavaPits() {
+  lavaPits = [];
+  const levelLen = 10000;
+  let wx = 500 + Math.random() * 300;
+  while (wx < levelLen) {
+    const progress = wx / levelLen;
+    // Mix of narrow cracks (visual) and wide cracks with lava pools (hurtbox)
+    const isPool = Math.random() < 0.25 + progress * 0.15; // ~25-40% are pools
+    const w = isPool
+      ? 55 + Math.random() * 50   // pools: 55-105px
+      : 20 + Math.random() * 35;  // cracks: 20-55px
+    // Generate jagged crack segments (seeded offsets per column)
+    const P = 4;
+    const cols = Math.ceil(w / P);
+    const segments = [];
+    const seed = Math.round(wx * 13.7) & 0xFFFF;
+    for (let c = 0; c < cols; c++) {
+      const hash = ((c * 31 + seed) * 2654435761 >>> 16);
+      const wiggleY = (hash % 5) - 2;           // -2 to +2 pixel offset
+      const depth = isPool
+        ? 2 + (hash >>> 4) % 3                  // pools: 2-4 deep
+        : 1 + (hash >>> 4) % 2;                 // cracks: 1-2 deep
+      segments.push({ wiggleY, depth });
+    }
+    lavaPits.push({
+      worldX: wx,
+      w: w,
+      isPool: isPool,
+      segments: segments,
+      glowPhase: Math.random() * Math.PI * 2
+    });
+    const gap = 400 + Math.random() * 300 - progress * 150;
+    wx += w + Math.max(180, gap);
+  }
+}
+
+function drawLavaPits() {
+  const P = 4;
+  for (const pit of lavaPits) {
+    const sx = pit.worldX - scrollOffset;
+    if (sx + pit.w < -50 || sx > W + 50) continue;
+    const gyMid = getGroundY(pit.worldX + pit.w / 2);
+    const pulse = Math.sin(frameCount * 0.05 + pit.glowPhase) * 0.25 + 0.75;
+    const cols = pit.segments.length;
+
+    // Ambient glow halo above crack (stronger for pools)
+    const glowStr = pit.isPool ? 0.15 : 0.06;
+    ctx.fillStyle = `rgba(255, 50, 0, ${glowStr * pulse})`;
+    ctx.beginPath();
+    ctx.ellipse(sx + pit.w / 2, gyMid - 2, pit.w * 0.6, pit.isPool ? 14 : 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let c = 0; c < cols; c++) {
+      const seg = pit.segments[c];
+      const colX = sx + c * P;
+      // Follow ground slope per column
+      const colGY = getGroundY(pit.worldX + c * P);
+      const crackY = colGY + seg.wiggleY * P;
+
+      // Dark crack edges (top and bottom rim)
+      ctx.fillStyle = '#0d0400';
+      ctx.fillRect(colX, crackY - P, P, P);
+      ctx.fillRect(colX, crackY + seg.depth * P, P, P);
+
+      // Lava inside the crack
+      for (let row = 0; row < seg.depth; row++) {
+        const hash = ((c * 7 + row * 11 + Math.floor(frameCount * 0.07 + pit.glowPhase)) & 0xFF);
+        const rowPulse = pulse * (0.85 + Math.sin(frameCount * 0.06 + c * 0.5) * 0.15);
+        let color;
+        if (pit.isPool && row >= 1) {
+          // Pool interior — brighter, more yellow
+          if (hash % 4 === 0) color = `rgba(255, 240, 80, ${rowPulse})`;
+          else if (hash % 3 === 0) color = `rgba(255, 180, 20, ${rowPulse})`;
+          else color = `rgba(255, 120, 0, ${rowPulse * 0.95})`;
+        } else {
+          // Crack interior — deeper oranges/reds
+          if (hash % 5 === 0) color = `rgba(255, 200, 60, ${rowPulse * 0.9})`;
+          else if (hash % 3 === 0) color = `rgba(255, 100, 0, ${rowPulse * 0.85})`;
+          else color = `rgba(200, 50, 0, ${rowPulse * 0.7})`;
+        }
+        ctx.fillStyle = color;
+        ctx.fillRect(colX, crackY + row * P, P, P);
+      }
+    }
+
+    // Bubbling bright spots for pools
+    if (pit.isPool) {
+      for (let b = 0; b < 4; b++) {
+        const bSeed = (Math.floor(frameCount * 0.08) * 37 + b * 53 + Math.round(pit.glowPhase * 100)) & 0xFFF;
+        const bc = bSeed % cols;
+        const seg = pit.segments[bc];
+        if (seg.depth < 2) continue;
+        const bx = sx + bc * P;
+        const bColGY = getGroundY(pit.worldX + bc * P);
+        const by = bColGY + seg.wiggleY * P + P;
+        const bright = ((bSeed >>> 4) % 3 === 0) ? '#ffee55' : '#ffaa00';
+        ctx.fillStyle = bright;
+        ctx.fillRect(bx, by, P, P);
+      }
+    }
+  }
+}
+
 // ── LAVA DROP SPAWNING ──
 // All lava objects use WORLD coordinates (worldX).
 // Screen position = worldX - scrollOffset
 function spawnLavaDrop() {
   let screenTargetX;
-  if (level === 4) {
+  if (level === 5) {
+    // Level 2-2: drops spread across right 40% of screen
+    screenTargetX = W * 0.6 + Math.random() * (W * 0.38);
+  } else if (isVolcanoLevel()) {
     // Level 2-1: drops only on rightmost 10%
     screenTargetX = W * 0.9 + Math.random() * (W * 0.1 - 20);
   } else {
@@ -1547,7 +1666,7 @@ window.addEventListener('keydown', e => {
   // Konami code detection — enter code, then press 1/2/3 to jump to level
   if (konamiActive) {
     // Waiting for level number after code was entered
-    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : 0;
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : e.code === 'Digit5' ? 5 : 0;
     if (levelNum > 0) {
       konamiActive = false;
       konamiUsed = true;
@@ -1586,10 +1705,11 @@ window.addEventListener('keydown', e => {
       if (levelNum < 4) {
         generateStreetLamps();
       }
-      if (levelNum === 4) {
+      if (levelNum >= 4) {
         generateTrees();
         generateRuins();
         generateBurningVillage();
+        if (levelNum === 5) generateLavaPits();
       }
       gameState = 'playing';
       musicStarted = true;
@@ -1847,6 +1967,7 @@ function clearGameState() {
   moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
+  lavaPits = [];
   shakeTimer = 0;
   flashTimer = 0;
   deathTimer = 0;
@@ -1870,7 +1991,7 @@ function clearGameState() {
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
-    level = Math.min(level + 1, 4);
+    level = Math.min(level + 1, 5);
     levelDuration = 1800 + level * 300;
   } else {
     level = 1;
@@ -1938,14 +2059,16 @@ function startGame() {
   moltenRocks = [];
   explosions = [];
   vehicleDebris = [];
+  lavaPits = [];
   generateBuildings();
-  if (level < 4) {
+  if (!isVolcanoLevel()) {
     generateStreetLamps();
   }
-  if (level === 4) {
+  if (isVolcanoLevel()) {
     generateTrees();
     generateRuins();
     generateBurningVillage();
+    if (level === 5) generateLavaPits();
   }
 }
 
@@ -2005,7 +2128,7 @@ function update() {
   // Level complete?
   if (levelTimer >= levelDuration) {
     if (!konamiUsed) score += level * 1000;
-    if (level >= 4) {
+    if (level >= 5) {
       // Stop all gameplay audio
       stopAllLevelMusic();
       stopSiren();
@@ -2036,10 +2159,12 @@ function update() {
   // Spawn lava drops - rate increases with level and time
   // Taper off during village transition (lava stops near the village)
   const levelProgress = levelTimer / levelDuration;
-  // No lava drops in 2nd half of level 2-1
-  const noDrops = level === 4 && levelProgress >= 0.5;
-  const dropRate = level === 4
-    ? Math.max(80, 140 - levelTimer * 0.007)
+  // Level 2-1: no drops in 2nd half. Level 2-2: no drops in last third
+  const noDrops = (level === 4 && levelProgress >= 0.5) || (level === 5 && levelProgress >= 0.67);
+  const dropRate = level === 5
+    ? Math.max(180, 300 - levelTimer * 0.004) // 2-2: very few drops
+    : isVolcanoLevel()
+    ? Math.max(120, 200 - levelTimer * 0.005) // 2-1: fewer drops
     : Math.max(15, 60 - level * 8 - levelTimer * 0.005);
   const lavaChance = villageProgress > 0.5 ? Math.max(0, 1 - (villageProgress - 0.5) * 2) : 1;
   if (!noDrops && frameCount % Math.floor(dropRate) === 0 && Math.random() < lavaChance) {
@@ -2151,7 +2276,7 @@ function update() {
   }
 
   // Street lamp platform collision (check before ground so lamps take priority)
-  if (level < 4) {
+  if (!isVolcanoLevel()) {
     for (const lamp of streetLamps) {
       const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
       const platLeft = lsx - lamp.lampW / 2;
@@ -2177,7 +2302,7 @@ function update() {
   }
 
   // Tree platform collision (level 4)
-  if (level === 4) {
+  if (isVolcanoLevel()) {
     let onTree = false;
     for (const t of trees) {
       if (t.collapsed || t.layer === 'back') continue; // mid + front trees have platforms
@@ -2381,8 +2506,23 @@ function update() {
     }
   }
 
-  // Lava-tree contact detection (level 4)
-  if (level === 4) {
+  // Lava crack collision (level 2-2) — only pool-type cracks kill
+  if (level === 5) {
+    const px = player.x + player.w / 2;
+    const py = player.y + player.h;
+    for (const pit of lavaPits) {
+      if (!pit.isPool) continue; // narrow cracks are visual only
+      const pitSX = pit.worldX - scrollOffset;
+      const pitGY = getGroundY(pit.worldX);
+      if (px > pitSX + 6 && px < pitSX + pit.w - 6 && py >= pitGY - 6 && (player.grounded || player.vy > 0)) {
+        die();
+        return;
+      }
+    }
+  }
+
+  // Lava-tree contact detection
+  if (isVolcanoLevel()) {
     for (const t of trees) {
       if (t.burning || t.collapsed) continue;
       const tsx = t.worldX - scrollOffset;
@@ -2412,7 +2552,7 @@ function update() {
   }
 
   // Burn timer update (level 4)
-  if (level === 4) {
+  if (isVolcanoLevel()) {
     for (const t of trees) {
       if (t.burning && !t.collapsed) {
         t.burnTimer++;
@@ -2439,12 +2579,22 @@ function update() {
   }
 
   // Rolling rocks (level 4)
-  if (level === 4) {
+  if (isVolcanoLevel()) {
     const progress = levelTimer / levelDuration;
     let rockRate;
-    if (progress < 0.33) rockRate = 200;
-    else if (progress < 0.66) rockRate = 140;
-    else rockRate = 100;
+    if (level === 5) {
+      // Level 2-2: moderate early, taper off in 2nd half
+      if (progress < 0.33) rockRate = 200;
+      else if (progress < 0.5) rockRate = 150;
+      else if (progress < 0.75) rockRate = 250;
+      else rockRate = 400;
+    } else {
+      // Level 2-1: similar taper in 2nd half
+      if (progress < 0.33) rockRate = 200;
+      else if (progress < 0.5) rockRate = 140;
+      else if (progress < 0.75) rockRate = 220;
+      else rockRate = 300;
+    }
     if (levelTimer % rockRate === 0) spawnRock();
 
     for (let i = rocks.length - 1; i >= 0; i--) {
@@ -2491,15 +2641,32 @@ function update() {
     }
   }
 
-  // Molten rocks (level 4)
-  if (level === 4) {
+  // Molten rocks (volcano levels)
+  if (isVolcanoLevel()) {
     const progress = levelTimer / levelDuration;
-    // Molten rocks only spawn in 2nd half of level 2-1
-    if (progress >= 0.5) {
+    let moltenSpawn = false;
+    if (level === 5) {
+      // Level 2-2: molten rocks from the start, taper in 2nd half
       let moltenRate;
-      if (progress < 0.75) moltenRate = 200;
-      else moltenRate = 120;
-      if ((levelTimer + 50) % moltenRate === 0) spawnMoltenRock();
+      if (progress < 0.33) moltenRate = 200;
+      else if (progress < 0.5) moltenRate = 150;
+      else if (progress < 0.75) moltenRate = 280;
+      else moltenRate = 400;
+      moltenSpawn = (levelTimer + 50) % moltenRate === 0;
+    } else {
+      // Level 2-1: molten rocks only in 2nd half, taper near end
+      if (progress >= 0.5) {
+        let moltenRate;
+        if (progress < 0.75) moltenRate = 200;
+        else moltenRate = 300;
+        moltenSpawn = (levelTimer + 50) % moltenRate === 0;
+      }
+    }
+    if (moltenSpawn) spawnMoltenRock();
+
+    // Periodic sizzle SFX for molten rocks
+    if (moltenRocks.length > 0 && frameCount % 30 === 0) {
+      playMoltenSizzle();
     }
 
     // Periodic sizzle SFX for molten rocks
@@ -2556,7 +2723,7 @@ function update() {
   for (let si = 0; si < neonSigns.length; si++) neonSigns[si].blink += neonSigns[si].blinkSpeed;
 
   // Spawn emergency vehicles (no vehicles in level 4 — destroyed wasteland):
-  if (level < 4) {
+  if (!isVolcanoLevel()) {
     // 0) Level 1: school bus right away — sets the tone
     // 1) School bus at exactly 1/3 mark
     // 2) Regular vehicle shortly after
@@ -4398,12 +4565,60 @@ function drawLavaPools() {
     const fadeIn = Math.min(1, (p.maxLife - p.life) / 30);
     const fadeOut = Math.min(1, p.life / 60);
     const alpha = fadeIn * fadeOut * p.intensity;
-    const poolGY = level === 4 ? getGroundY(p.worldX) : GROUND_Y;
+    const poolGY = isVolcanoLevel() ? getGroundY(p.worldX) : GROUND_Y;
 
     // Snap pool to pixel grid
     const lx = Math.round((screenX - p.w / 2) / P) * P;
     const pw = Math.round(p.w / P) * P;
     const totalCols = pw / P;
+
+    if (isVolcanoLevel()) {
+      // ── CRACK STYLE for volcano levels ──
+      // Jagged narrow fissure with lava glow inside
+      const seed = Math.round(p.worldX * 7.3) & 0xFFFF;
+      ctx.globalAlpha = alpha;
+
+      // Dark crack outline (jagged shape)
+      for (let col = 0; col < totalCols; col++) {
+        const colX = lx + col * P;
+        // Jagged depth: use seeded hash to vary crack width per column
+        const jag = ((col * 31 + seed) * 2654435761 >>> 16) & 7;
+        const crackDepth = Math.max(1, Math.min(3, 1 + (jag % 3)));
+        // Offset from ground — crack wiggles up/down
+        const wiggle = ((col * 17 + seed * 3) * 2654435761 >>> 20) % 3 - 1;
+        const crackY = poolGY + wiggle * P;
+
+        // Dark edges of the crack
+        ctx.fillStyle = '#1a0500';
+        ctx.fillRect(colX, crackY - P, P, P);
+        ctx.fillRect(colX, crackY + crackDepth * P, P, P);
+
+        // Lava glow inside the crack
+        for (let row = 0; row < crackDepth; row++) {
+          const hash = ((col * 7 + row * 13 + Math.floor(frameCount * 0.06 + p.waveOffset)) & 0xFF);
+          const pulse = Math.sin(frameCount * 0.04 + col * 0.3 + p.waveOffset) * 0.15 + 0.85;
+          if (hash % 5 === 0) {
+            ctx.fillStyle = `rgba(255, 238, 100, ${pulse})`;
+          } else if (hash % 3 === 0) {
+            ctx.fillStyle = `rgba(255, 160, 0, ${pulse})`;
+          } else {
+            ctx.fillStyle = `rgba(255, 80, 0, ${pulse * 0.9})`;
+          }
+          ctx.fillRect(colX, crackY + row * P, P, P);
+        }
+      }
+
+      // Ambient glow above the crack
+      ctx.globalAlpha = alpha * 0.12;
+      const glowPulse = Math.sin(frameCount * 0.03 + p.waveOffset) * 0.3 + 0.7;
+      ctx.fillStyle = `rgba(255, 60, 0, ${glowPulse})`;
+      ctx.beginPath();
+      ctx.ellipse(lx + pw / 2, poolGY, pw * 0.55, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+    } else {
+    // ── POOL STYLE for city levels ──
     const maxDepth = 4; // max pixel rows deep at center
     const taperCols = Math.max(2, Math.floor(totalCols * 0.25)); // 25% taper on each side
 
@@ -4483,11 +4698,11 @@ function drawLavaPools() {
       const d1 = poolDepthAt(col, totalCols, taperCols, maxDepth), d2 = poolDepthAt(col + 1, totalCols, taperCols, maxDepth);
       if (d1 > d2) ctx.fillRect(lx + col * P, poolGY + d2 * P, P, (d1 - d2) * P);
     }
+    } // end city pool style
 
     // ── Ember particles (square pixels rising) ──
     if (particles.length < MAX_PARTICLES && Math.random() < 0.15 * alpha) {
-      // Favor embers from the deeper center area
-      const emCol = Math.floor(taperCols + Math.random() * (totalCols - taperCols * 2));
+      const emCol = Math.floor(totalCols * 0.25 + Math.random() * (totalCols * 0.5));
       const emX = lx + emCol * P;
       particles.push({
         x: emX,
@@ -5513,7 +5728,7 @@ function drawPlayer() {
     // Shadow on ground
     ctx.globalAlpha = 0.3;
     ctx.fillStyle = '#000';
-    const shadowGroundY = level === 4 ? getGroundY(player.x + scrollOffset) : GROUND_Y;
+    const shadowGroundY = isVolcanoLevel() ? getGroundY(player.x + scrollOffset) : GROUND_Y;
     const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (shadowGroundY - (player.y + player.h)) / 200);
     ctx.beginPath();
     ctx.ellipse(cx, shadowGroundY + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
@@ -5545,8 +5760,8 @@ function drawHUD() {
   ctx.fillStyle = '#33ccff';
   ctx.font = `bold 7px ${GAME_FONT}`;
   ctx.textAlign = 'left';
-  const hudLevel = level <= 3 ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
-  const hudLocation = level <= 3 ? 'NEO TOKYO' : 'THE VOLCANO';
+  const hudLevel = !isVolcanoLevel() ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
+  const hudLocation = !isVolcanoLevel() ? 'NEO TOKYO' : 'THE VOLCANO';
   ctx.fillText(`${hudLevel} — ${hudLocation}`, 20, 38);
 
   // Score
@@ -6526,14 +6741,14 @@ function drawTransition() {
   ctx.shadowColor = '#33ccff';
   ctx.shadowBlur = 20;
   ctx.font = `bold 20px ${GAME_FONT}`;
-  const levelDisplay = level <= 3 ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
+  const levelDisplay = !isVolcanoLevel() ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
   ctx.fillText(levelDisplay, W / 2, H / 2 - 20);
   ctx.shadowBlur = 0;
 
   // Location name
   ctx.fillStyle = '#ffcc88';
   ctx.font = `12px ${GAME_FONT}`;
-  const locationName = level <= 3 ? 'NEO TOKYO' : 'THE VOLCANO';
+  const locationName = !isVolcanoLevel() ? 'NEO TOKYO' : 'THE VOLCANO';
   ctx.fillText(locationName, W / 2, H / 2 + 20);
 
   ctx.globalAlpha = 1;
@@ -6765,7 +6980,7 @@ function draw() {
     drawSfxScreen();
   } else {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
-    if (level === 4) {
+    if (isVolcanoLevel()) {
       drawDestroyedCitySky();
       if (!level2BgReady) {
         drawRuinsLayer(ruins_far, 0.1, 0, false);
@@ -6782,7 +6997,7 @@ function draw() {
       drawBuildingLayer(buildings_near, 0.5, 0.1);
     }
     let playerDrawnInDepth = false;
-    if (level === 4) {
+    if (isVolcanoLevel()) {
       // ── LAYER 1: BACK TREES (behind ground + player) ──
       _updateTreeConsts();
       for (const t of trees) {
@@ -6795,8 +7010,9 @@ function draw() {
     } else {
       drawStreet();
     }
-    if (level === 4) {
-      // ── LAYER 2: GROUND LAYER — lava pools, mid trees, rocks, player ──
+    if (isVolcanoLevel()) {
+      // ── LAYER 2: GROUND LAYER — lava pits, lava pools, mid trees, rocks, player ──
+      if (level === 5) drawLavaPits();
       drawLavaPools();
       for (const t of trees) {
         if (t.layer !== 'mid') continue;
@@ -6837,7 +7053,7 @@ function draw() {
 
     // Village environment draws on top of the shadow
     drawVillage();
-    if (level !== 4) drawLavaPools(); // level 4 draws pools in ground layer
+    if (!isVolcanoLevel()) drawLavaPools(); // volcano levels draw pools in ground layer
     drawVehicles();
     drawLavaDrops();
     drawExplosions();
