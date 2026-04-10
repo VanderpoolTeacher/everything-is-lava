@@ -56,11 +56,65 @@ const GROUND_Y = H - 60; // street level
 
 function isVolcanoLevel() { return level >= 4; }
 
+// Level 2-3 vertical climb state
+let verticalMode = false;       // true once 2-3 transitions to vertical platformer
+let scrollOffsetY = 0;          // vertical scroll offset (negative = scrolled up)
+let playerWorldY = 0;           // player's world Y position (0 = ground, negative = up)
+let climbLedges = [];           // { worldX, worldY, w } — platforms to climb
+let gasClouds = [];             // { worldX, worldY, w, h, speed, phase }
+let summitSmokeClouds = [];     // gas-cloud-style smoke at the volcano top (cosmetic only)
+let gasExposure = 0;            // frames spent inside gas (resets when outside)
+const GAS_KILL_THRESHOLD = 90;  // ~1.5 seconds in gas = death
+const VERTICAL_TRANSITION_PROGRESS = 0.20; // slope intro ends here, cliff transition begins
+const CLIFF_TRANSITION_PROGRESS = 0.30; // vertical mode fully starts here
+let cliffTransition = 0; // 0-1 progress through the cliff-slide-in phase
+let cliffWorldX = 0; // world X where the cliff face starts (set when transition begins)
+const CLIMB_GROUND_Y = 60; // ground is 60px from bottom of screen in vertical mode
+// Convert vertical world Y to screen Y: worldY=0 is ground level
+function climbScreenY(worldY) { return (H - CLIMB_GROUND_Y) + worldY - scrollOffsetY; }
+
+// Climb birds — fly across screen during vertical climb, knockback but don't kill
+let climbBirds = [];  // { x, y, vx, frame, timer, w, h, dir }
+
+// Summit pause — player stands on lip, waits for input before victory
+let summitReached = false;
+let summitTimer = 0;
+let summitWaitingForInput = false; // true once ready for player to press a button
+let summitConfirmed = false;       // true once player has fully disappeared into the crater
+let summitJumping = false;         // true while player is airborne diving into the volcano
+let summitJumpTimer = 0;
+let summitPlayerAlpha = 1;         // fades from 1 → 0 as the player descends into the volcano
+let summitJumpPastApex = false;    // true once the player has peaked and started falling — draw behind mountain
+let summitApexPlayerY = 0;         // screen y where the player was at the top of the jump (snap point for back-layer render)
+let summitPostApexFrames = 0;      // frames elapsed since apex — drives fade-out
+const SUMMIT_PAUSE_FRAMES = 90; // brief pause before showing prompt
+
+// Eruption effect — cosmetic lava shooting up from the volcano lip
+let eruptionParticles = [];
+
 function getGroundY(worldX) {
   if (!isVolcanoLevel()) return GROUND_Y;
+  if (level === 6 && verticalMode) return climbScreenY(0); // solid ground at bottom, scrolls with camera
   const progress = Math.min(1, levelTimer / levelDuration);
   let slope;
-  if (level === 5) {
+  if (level === 6) {
+    if (cliffTransition > 0) {
+      // Flat zero plane once cliff transition begins
+      slope = 0;
+    } else {
+      // Level 2-3: slope ramps up then eases to 0 before transition
+      const horizProgress = Math.min(1, progress / VERTICAL_TRANSITION_PROGRESS);
+      const baseSlope = 0.45 + horizProgress * 0.15; // 45% → 60%
+      // Ease slope to 0 in the last 30% of the horizontal phase
+      const flattenStart = 0.7;
+      if (horizProgress > flattenStart) {
+        const flattenT = (horizProgress - flattenStart) / (1 - flattenStart);
+        slope = baseSlope * (1 - flattenT * flattenT); // smooth ease to 0
+      } else {
+        slope = baseSlope;
+      }
+    }
+  } else if (level === 5) {
     // Level 2-2: steep slope, 15% → 45%
     slope = 0.15 + progress * 0.30;
   } else {
@@ -134,6 +188,11 @@ smallTreeImg.src = 'assets/small-tree-01.png';
 let smallTreeImgReady = false;
 smallTreeImg.onload = function() { smallTreeImgReady = true; };
 
+const volcanoBg23 = new Image();
+volcanoBg23.src = 'assets/volcano-bg-2-3.png';
+let volcanoBg23Ready = false;
+volcanoBg23.onload = function() { volcanoBg23Ready = true; };
+
 const moltenRockImg = new Image();
 moltenRockImg.src = 'assets/molten-rock.png';
 let moltenRockImgReady = false;
@@ -163,6 +222,7 @@ function applyMasterVolume() {
   const v = muted ? 0 : masterVolume;
   levelMusic.volume = 0.5 * v;
   volcanoMusic.volume = 0.5 * v;
+  volcanoDescentMusic.volume = 0.5 * v;
   dojoTracks.forEach(t => { t.volume = 0.4 * v; });
   titleMusic.volume = 0.4 * v;
   gameOverMusic.volume = 0.6 * v;
@@ -178,14 +238,23 @@ levelMusic.volume = 0.5;
 const volcanoMusic = new Audio('assets/music/volcano-climb.mp3');
 volcanoMusic.loop = true;
 volcanoMusic.volume = 0.5;
+const volcanoDescentMusic = new Audio('assets/music/volcano-descent.mp3');
+volcanoDescentMusic.loop = true;
+volcanoDescentMusic.volume = 0.5;
 let musicStarted = false;
 
 function getCurrentMusic() {
-  return isVolcanoLevel() ? volcanoMusic : levelMusic;
+  // Level 1 (1-1 to 1-3): neo-tokyo music
+  // Level 2 (2-1 to 2-3): volcano climb music
+  // Level 3: volcano descent music
+  if (isVolcanoLevel()) return volcanoMusic;
+  // TODO: level 3 when it exists will use volcanoDescentMusic
+  return levelMusic;
 }
 function stopAllLevelMusic() {
   levelMusic.pause(); levelMusic.currentTime = 0;
   volcanoMusic.pause(); volcanoMusic.currentTime = 0;
+  volcanoDescentMusic.pause(); volcanoDescentMusic.currentTime = 0;
 }
 function playCurrentMusic() {
   const m = getCurrentMusic();
@@ -782,6 +851,72 @@ function playMoltenSizzle() {
   } catch(e) {}
 }
 
+// Cough sound — loud percussive hack
+function playCough() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.8;
+
+    // 1. Sharp percussive "hack" onset — short noise pop
+    const popLen = Math.floor(ac.sampleRate * 0.06);
+    const popBuf = ac.createBuffer(1, popLen, ac.sampleRate);
+    const pd = popBuf.getChannelData(0);
+    for (let i = 0; i < popLen; i++) {
+      const t = i / popLen;
+      const env = t < 0.1 ? t / 0.1 : Math.pow(1 - (t - 0.1) / 0.9, 2);
+      pd[i] = (Math.random() * 2 - 1) * env;
+    }
+    const popSrc = ac.createBufferSource();
+    popSrc.buffer = popBuf;
+    const popGain = ac.createGain();
+    popGain.gain.setValueAtTime(vol * 1.2, now);
+    popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    popSrc.connect(popGain);
+    popGain.connect(ac.destination);
+    autoCleanup(popSrc, [popSrc, popGain]);
+    popSrc.start(now);
+
+    // 2. Breathy raspy exhale — longer noise with wide filter
+    const len = Math.floor(ac.sampleRate * 0.35);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = t < 0.05 ? t / 0.05 : Math.pow(1 - (t - 0.05) / 0.95, 1.5);
+      d[i] = (Math.random() * 2 - 1) * env;
+    }
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const filt = ac.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.value = 800;
+    filt.Q.value = 0.8; // wide Q — lets more sound through
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(vol, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    src.connect(filt);
+    filt.connect(gain);
+    gain.connect(ac.destination);
+    autoCleanup(src, [src, filt, gain]);
+    src.start(now + 0.02);
+
+    // 3. Chest thump — low sine for body resonance
+    const chest = ac.createOscillator();
+    chest.type = 'sine';
+    chest.frequency.setValueAtTime(150, now);
+    chest.frequency.exponentialRampToValueAtTime(60, now + 0.15);
+    const chestGain = ac.createGain();
+    chestGain.gain.setValueAtTime(vol * 0.6, now);
+    chestGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    chest.connect(chestGain);
+    chestGain.connect(ac.destination);
+    autoCleanup(chest, [chest, chestGain]);
+    chest.start(now);
+    chest.stop(now + 0.2);
+  } catch(e) {}
+}
+
 // Tree burning — crackling fire with rising pitch
 let _fireBuf = null;
 function getFireBuf(ac) {
@@ -873,6 +1008,79 @@ function playTreeCollapse() {
   } catch(e) {}
 }
 
+let lastEagleScreedFrame = -999;
+function playEagleScreech() {
+  // Rate-limit: no more than once every 120 frames (~2 sec)
+  if (frameCount - lastEagleScreedFrame < 120) return;
+  lastEagleScreedFrame = frameCount;
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.25;
+    // Harsh screeching eagle cry — two detuned sawtooths with fast vibrato
+    const screech1 = ac.createOscillator();
+    screech1.type = 'sawtooth';
+    screech1.frequency.setValueAtTime(3200, now);
+    screech1.frequency.exponentialRampToValueAtTime(2400, now + 0.08);
+    screech1.frequency.exponentialRampToValueAtTime(3600, now + 0.18);
+    screech1.frequency.exponentialRampToValueAtTime(2000, now + 0.35);
+    screech1.frequency.exponentialRampToValueAtTime(3000, now + 0.45);
+    screech1.frequency.exponentialRampToValueAtTime(1400, now + 0.65);
+    // Second detuned oscillator for harsh texture
+    const screech2 = ac.createOscillator();
+    screech2.type = 'square';
+    screech2.frequency.setValueAtTime(3400, now);
+    screech2.frequency.exponentialRampToValueAtTime(2600, now + 0.08);
+    screech2.frequency.exponentialRampToValueAtTime(3800, now + 0.18);
+    screech2.frequency.exponentialRampToValueAtTime(2100, now + 0.35);
+    screech2.frequency.exponentialRampToValueAtTime(3200, now + 0.45);
+    screech2.frequency.exponentialRampToValueAtTime(1500, now + 0.65);
+    // Fast vibrato for warbling screech
+    const vib = ac.createOscillator();
+    vib.type = 'sine';
+    vib.frequency.value = 45;
+    const vibGain = ac.createGain();
+    vibGain.gain.value = 150;
+    vib.connect(vibGain);
+    vibGain.connect(screech1.frequency);
+    vibGain.connect(screech2.frequency);
+    // Harsh highpass filter — keeps it screechy
+    const filt = ac.createBiquadFilter();
+    filt.type = 'highpass';
+    filt.frequency.value = 1800;
+    filt.Q.value = 3;
+    const gain1 = ac.createGain();
+    gain1.gain.setValueAtTime(vol * 0.7, now);
+    gain1.gain.setValueAtTime(vol, now + 0.08);
+    gain1.gain.setValueAtTime(vol * 0.5, now + 0.2);
+    gain1.gain.setValueAtTime(vol * 0.8, now + 0.35);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+    const gain2 = ac.createGain();
+    gain2.gain.setValueAtTime(vol * 0.3, now);
+    gain2.gain.setValueAtTime(vol * 0.5, now + 0.08);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+    screech1.connect(filt);
+    const filt2 = ac.createBiquadFilter();
+    filt2.type = 'highpass';
+    filt2.frequency.value = 2000;
+    filt2.Q.value = 2;
+    screech2.connect(filt2);
+    filt.connect(gain1);
+    filt2.connect(gain2);
+    gain1.connect(ac.destination);
+    gain2.connect(ac.destination);
+    autoCleanup(screech1, [screech1, screech2, vib, vibGain, filt, filt2, gain1, gain2]);
+    autoCleanup(screech2, []);
+    autoCleanup(vib, []);
+    screech1.start(now);
+    screech1.stop(now + 0.65);
+    screech2.start(now);
+    screech2.stop(now + 0.65);
+    vib.start(now);
+    vib.stop(now + 0.65);
+  } catch(e) {}
+}
+
 // ── PLAYER ──
 const SPRITE_W = 72;
 const SPRITE_H = 76;
@@ -894,7 +1102,8 @@ const player = {
   facingRight: true, // last horizontal direction faced
   idleTimer: 0,      // frames since last movement input
   crouching: false,    // crouch state (down arrow / S key while grounded)
-  depthScale: 1        // perspective scale — >1 on front trees, <1 on back trees
+  depthScale: 1,       // perspective scale — >1 on front trees, <1 on back trees
+  knockbackTimer: 0    // frames of knockback animation remaining
 };
 
 // ── LAVA SYSTEMS ──
@@ -1303,12 +1512,716 @@ function drawLavaPits() {
   }
 }
 
+// ── LEVEL 2-3: VERTICAL CLIMB LEDGES & GAS CLOUDS ──
+
+const CLIMB_TOTAL_HEIGHT = 4000; // total vertical distance to summit (shorter mountain)
+
+function generateClimbLedges() {
+  climbLedges = [];
+  // Larger vertical gaps — require commitment + double jump
+  const MIN_VERT_GAP = 115;
+  const MAX_VERT_GAP = 145;
+  // Center-to-center horizontal distance between consecutive ledges — much wider spread
+  const MIN_HORIZ_STEP = 200; // must commit hard to horizontal movement
+  const MAX_HORIZ_STEP = 300; // near-wall-to-wall reach
+
+  let wy = -100; // first ledge above ground
+  let lastLedgeX = W / 2 - 70;
+  let lastLedgeW = 140;
+  let lastCenter = lastLedgeX + lastLedgeW / 2;
+
+  function getWalls(prog) {
+    const taperStart = 0.8;
+    const taperFrac = prog > taperStart ? (prog - taperStart) / (1 - taperStart) : 0;
+    const taperAmount = taperFrac * taperFrac * 0.15;
+    return {
+      left: taperAmount * W * 0.5 + 30,
+      right: W - taperAmount * W * 0.5 - 30
+    };
+  }
+
+  // Probability-based alternation: after a ledge on one side, the NEXT ledge
+  // has a 2x chance (2/3) of being on the OPPOSITE side, and a 1x chance (1/3)
+  // of staying on the same side. First ledge is randomised so runs don't always
+  // start on the same side.
+  let currentSide = Math.random() < 0.5 ? 'left' : 'right';
+
+  while (wy > -CLIMB_TOTAL_HEIGHT + 40) {
+    const progress = Math.abs(wy) / CLIMB_TOTAL_HEIGHT;
+    const walls = getWalls(progress);
+    const midX = (walls.left + walls.right) / 2;
+
+    // Smaller ledges — 18-30% of available width, min 70px
+    const availableWidth = walls.right - walls.left;
+    const ledgeW = Math.max(70, availableWidth * (0.18 + Math.random() * 0.12));
+
+    // Bigger vertical gap — double jump territory
+    const vertGap = MIN_VERT_GAP + Math.random() * (MAX_VERT_GAP - MIN_VERT_GAP);
+
+    // Compute the valid center range for the new ledge:
+    //   1. Must be on the opposite side of midX from the previous ledge
+    //   2. Must be within [MIN_HORIZ_STEP, MAX_HORIZ_STEP] from lastCenter horizontally
+    //   3. Must fit within the walls
+    let centerMin, centerMax;
+    if (currentSide === 'right') {
+      // New ledge goes right of midline; its center is > lastCenter
+      centerMin = Math.max(midX + 20 + ledgeW / 2, lastCenter + MIN_HORIZ_STEP);
+      centerMax = Math.min(walls.right - ledgeW / 2, lastCenter + MAX_HORIZ_STEP);
+    } else {
+      // New ledge goes left of midline; its center is < lastCenter
+      centerMin = Math.max(walls.left + ledgeW / 2, lastCenter - MAX_HORIZ_STEP);
+      centerMax = Math.min(midX - 20 - ledgeW / 2, lastCenter - MIN_HORIZ_STEP);
+    }
+
+    // If the opposite-side range is empty (e.g. near the narrow summit), relax
+    // the opposite-side constraint but still enforce the horizontal step
+    if (centerMin > centerMax) {
+      if (currentSide === 'right') {
+        centerMin = Math.max(walls.left + ledgeW / 2, lastCenter + MIN_HORIZ_STEP);
+        centerMax = Math.min(walls.right - ledgeW / 2, lastCenter + MAX_HORIZ_STEP);
+      } else {
+        centerMin = Math.max(walls.left + ledgeW / 2, lastCenter - MAX_HORIZ_STEP);
+        centerMax = Math.min(walls.right - ledgeW / 2, lastCenter - MIN_HORIZ_STEP);
+      }
+    }
+    // Last-resort fallback — place anywhere within walls
+    if (centerMin > centerMax) {
+      centerMin = walls.left + ledgeW / 2;
+      centerMax = walls.right - ledgeW / 2;
+      if (centerMin > centerMax) centerMin = centerMax = midX;
+    }
+
+    // Bias toward the outer edge of the range so consecutive ledges feel far apart
+    // For the right side, bias toward centerMax; for the left side, bias toward centerMin
+    const bias = 1 - Math.random() * Math.random(); // biased toward 1 (outer)
+    const ledgeCenter = currentSide === 'right'
+      ? centerMin + bias * (centerMax - centerMin)
+      : centerMax - bias * (centerMax - centerMin);
+    let ledgeX = ledgeCenter - ledgeW / 2;
+    ledgeX = Math.max(walls.left, Math.min(walls.right - ledgeW, ledgeX));
+
+    climbLedges.push({
+      worldX: ledgeX,
+      worldY: wy,
+      w: ledgeW,
+      h: 16,
+      seed: Math.random() * 10000 | 0
+    });
+
+    // ── TINY FILLER PLATFORM on the opposite (empty) side ──
+    // Gives the climb some visual texture + optional tiny footholds
+    // Skip occasionally for variety
+    if (Math.random() < 0.75) {
+      const tinyW = 30 + Math.random() * 20; // 30-50px wide
+      const tinyYOffset = vertGap * (0.35 + Math.random() * 0.3); // between main ledges vertically
+      const tinyWy = wy - tinyYOffset;
+      // Place on the opposite side — where the NEXT main ledge will NOT be
+      // currentSide is this ledge's side; the next one flips, so the "empty" band
+      // near this ledge is the opposite side
+      const oppositeSide = currentSide === 'left' ? 'right' : 'left';
+      let tinyX;
+      if (oppositeSide === 'left') {
+        // Push toward the left wall
+        const tinyMin = walls.left + 4;
+        const tinyMax = Math.min(midX - 40 - tinyW, walls.right - tinyW);
+        tinyX = tinyMax > tinyMin
+          ? tinyMin + Math.random() * Math.random() * (tinyMax - tinyMin)
+          : tinyMin;
+      } else {
+        const tinyMin = Math.max(midX + 40, walls.left);
+        const tinyMax = walls.right - tinyW - 4;
+        tinyX = tinyMax > tinyMin
+          ? tinyMin + (1 - Math.random() * Math.random()) * (tinyMax - tinyMin)
+          : Math.max(walls.left, tinyMax);
+      }
+      tinyX = Math.max(walls.left, Math.min(walls.right - tinyW, tinyX));
+      climbLedges.push({
+        worldX: tinyX,
+        worldY: tinyWy,
+        w: tinyW,
+        h: 10,
+        seed: Math.random() * 10000 | 0,
+        tiny: true
+      });
+    }
+
+    lastLedgeX = ledgeX;
+    lastLedgeW = ledgeW;
+    lastCenter = ledgeX + ledgeW / 2;
+    wy -= vertGap;
+
+    // 2x weighted flip: 2/3 chance the next ledge is on the OPPOSITE side,
+    // 1/3 chance it stays on the same side. Applies symmetrically to both
+    // sides so the climb doesn't drift toward one wall.
+    if (Math.random() < 2 / 3) {
+      currentSide = currentSide === 'left' ? 'right' : 'left';
+    }
+  }
+
+  // Summit ledge — sits right on top of the mountain rock, at the lip
+  // Use a slight offset so the platform graphic sits ON the mountain, not floating above
+  const summitTaperAmt = ((1.0 - 0.8) / 0.2);
+  const summitTaper = summitTaperAmt * summitTaperAmt * 0.15;
+  const summitLeft = summitTaper * W * 0.5 + 20;
+  const summitRight = W - summitTaper * W * 0.5 - 20;
+  climbLedges.push({
+    worldX: summitLeft,
+    worldY: -CLIMB_TOTAL_HEIGHT + 4 - 30, // sits on the volcano lip (moved down 10px from previous)
+    w: summitRight - summitLeft,
+    h: 20,
+    seed: 77777,
+    isSummit: true
+  });
+
+  // Bridge any gap to summit
+  const lastRegularY = climbLedges[climbLedges.length - 2]?.worldY || 0;
+  const gapToSummit = Math.abs(lastRegularY - (-CLIMB_TOTAL_HEIGHT - 16));
+  if (gapToSummit > 100) {
+    const topWalls = getWalls(0.95);
+    const stepY = -CLIMB_TOTAL_HEIGHT + 80;
+    const stepW = Math.max(100, (topWalls.right - topWalls.left) * 0.5);
+    const stepX = topWalls.left + Math.random() * Math.max(0, topWalls.right - topWalls.left - stepW);
+    climbLedges.push({
+      worldX: stepX, worldY: stepY, w: stepW, h: 16,
+      seed: Math.random() * 10000 | 0
+    });
+  }
+}
+
+function generateGasClouds() {
+  gasClouds = [];
+  let wy = -300;
+  while (wy > -CLIMB_TOTAL_HEIGHT + 300) {
+    const progress = Math.abs(wy) / CLIMB_TOTAL_HEIGHT;
+    const cloudW = 280 + Math.random() * 300 + progress * 150; // wider at top
+    const cloudH = 100 + Math.random() * 80 + progress * 120; // much thicker at top
+    const cloudX = -100 + Math.random() * (W - cloudW + 200); // can start partially off-screen
+    const seed = Math.floor(Math.random() * 99999);
+    const P = 4; // 4px blocks for sharper pixel art
+
+    // Generate cauliflower sub-blobs — irregular lumpy shapes, no single dominant ellipse
+    const blobCount = 7 + Math.floor(Math.random() * 5) + Math.floor(progress * 5);
+    const blobs = [];
+    // Ring of blobs around the perimeter — placed at EDGES for bumpy left/right/top/bottom
+    const perimCount = 6 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < perimCount; i++) {
+      const angle = (i / perimCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
+      // Push blobs further out toward grid edges, with random radial variation
+      const radialDist = 0.3 + Math.random() * 0.2;
+      blobs.push({
+        cx: 0.5 + Math.cos(angle) * radialDist,
+        cy: 0.45 + Math.sin(angle) * (radialDist * 0.75),
+        rx: 0.1 + Math.random() * 0.2,
+        ry: 0.08 + Math.random() * 0.16,
+        bright: 0.2 + Math.random() * 0.4
+      });
+    }
+    // Extra blobs specifically on left and right edges for bumpy sides
+    for (let i = 0; i < 3; i++) {
+      const side = Math.random() < 0.5 ? 0.05 + Math.random() * 0.12 : 0.83 + Math.random() * 0.12;
+      blobs.push({
+        cx: side,
+        cy: 0.2 + Math.random() * 0.5,
+        rx: 0.08 + Math.random() * 0.12,
+        ry: 0.08 + Math.random() * 0.15,
+        bright: 0.2 + Math.random() * 0.3
+      });
+    }
+    // Interior blobs for density and bright cores
+    for (let i = 0; i < blobCount - perimCount; i++) {
+      blobs.push({
+        cx: 0.15 + Math.random() * 0.7,
+        cy: 0.15 + Math.random() * 0.6,
+        rx: 0.1 + Math.random() * 0.22,
+        ry: 0.1 + Math.random() * 0.18,
+        bright: 0.4 + Math.random() * 0.6
+      });
+    }
+    // A few smaller overlapping core blobs (NOT one big ellipse)
+    for (let i = 0; i < 3; i++) {
+      blobs.push({
+        cx: 0.3 + Math.random() * 0.4,
+        cy: 0.25 + Math.random() * 0.35,
+        rx: 0.15 + Math.random() * 0.15,
+        ry: 0.12 + Math.random() * 0.15,
+        bright: 0.7 + Math.random() * 0.3
+      });
+    }
+
+    // Pre-generate shape grid with cauliflower blobbing
+    const cols = Math.ceil(cloudW / P);
+    const rows = Math.ceil(cloudH / P);
+    const shape = [];
+    const brightness = []; // per-cell brightness for core glow
+    for (let r = 0; r < rows; r++) {
+      shape[r] = [];
+      brightness[r] = [];
+      for (let c = 0; c < cols; c++) {
+        const nx = c / cols;
+        const ny = r / rows;
+        let maxDensity = 0;
+        let maxBright = 0;
+        for (const blob of blobs) {
+          const dx = (nx - blob.cx) / blob.rx;
+          const dy = (ny - blob.cy) / blob.ry;
+          const d = dx * dx + dy * dy;
+          if (d < 1) {
+            const density = 1 - d;
+            if (density > maxDensity) maxDensity = density;
+            maxBright = Math.max(maxBright, density * blob.bright);
+          }
+        }
+        // Edge falloff — density fades near grid borders so shapes don't get clipped flat
+        const edgeDistX = Math.min(nx, 1 - nx); // 0 at edges, 0.5 at center
+        const edgeDistY = Math.min(ny, 1 - ny);
+        const edgeFalloff = Math.min(1, Math.min(edgeDistX, edgeDistY) * 12); // smooth ramp in outer ~8%
+
+        // Hash noise for organic edges — heavy randomization for bumpy, irregular boundary
+        const h = ((c * 17 + r * 31 + seed) * 2654435761 >>> 16) & 0xFFFF;
+        const h2 = ((c * 53 + r * 97 + seed * 3) * 2654435761 >>> 16) & 0xFFFF;
+        const h3 = ((c * 41 + r * 73 + seed * 7) * 2654435761 >>> 16) & 0xFFFF;
+        // Large-scale noise for big lumpy bulges + fine noise for ragged edges
+        const bigNoise = (h / 65536) * 0.35;
+        const fineNoise = (h2 / 65536) * 0.15;
+        const extraNoise = (h3 / 65536) * 0.08;
+        const noise = bigNoise + fineNoise + extraNoise;
+        // Apply edge falloff to density so blobs dissolve at grid borders
+        shape[r][c] = (maxDensity * edgeFalloff) > 0.1 + noise ? 1 : 0;
+        brightness[r][c] = maxBright;
+        // Dripping tendrils at bottom
+        if (ny > 0.75 && shape[r][c] === 0 && r > 0 && shape[r - 1][c]) {
+          const dripChance = (h & 7) < 2 ? 1 : 0;
+          shape[r][c] = dripChance;
+          brightness[r][c] = maxBright * 0.4;
+        }
+      }
+    }
+
+    // Generate floating bubble positions (seeded)
+    const bubbleCount = 6 + Math.floor(Math.random() * 6);
+    const bubbles = [];
+    for (let i = 0; i < bubbleCount; i++) {
+      bubbles.push({
+        nx: 0.05 + Math.random() * 0.9,
+        ny: 0.1 + Math.random() * 0.8,
+        r: 2 + Math.random() * 4,
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+
+    const moveDir = Math.random() < 0.5 ? 1 : -1; // each cloud picks a direction and sticks with it
+    gasClouds.push({
+      worldX: cloudX, worldY: wy, w: cloudW, h: cloudH,
+      speed: 0.15 + Math.random() * 1.4, // wide range: some drift slowly, some move fast
+      dir: moveDir,
+      phase: Math.random() * Math.PI * 2,
+      density: 0.6 + progress * 0.4,
+      seed, shape, brightness, cols, rows, bubbles,
+      offsetX: 0 // accumulated horizontal travel
+    });
+    // Clouds get much closer together near the top — dense toxic layer
+    wy -= 80 + Math.random() * 160 - progress * 100;
+  }
+}
+
+function generateSummitSmoke() {
+  summitSmokeClouds = [];
+  const P = 4;
+  // 3 layers of large grey/black clouds at the volcano top
+  // layer 0 = background (hovers/bobs), layer 1 = mid (drifts left), layer 2 = foreground (drifts right)
+  const layerConfigs = [
+    { count: 15, layer: 0, minW: 500, maxW: 900, minH: 150, maxH: 280, speed: 0, alpha: 0.8 },   // bg: hover
+    { count: 15, layer: 1, minW: 400, maxW: 800, minH: 120, maxH: 250, speed: 0.4, alpha: 0.65 }, // mid: left
+    { count: 12, layer: 2, minW: 450, maxW: 850, minH: 100, maxH: 220, speed: 0.5, alpha: 0.5 }   // fg: right
+  ];
+
+  for (const cfg of layerConfigs) {
+    for (let i = 0; i < cfg.count; i++) {
+      const cloudW = cfg.minW + Math.random() * (cfg.maxW - cfg.minW);
+      const cloudH = cfg.minH + Math.random() * (cfg.maxH - cfg.minH);
+      const cloudX = -300 + Math.random() * (W + 500);
+      const cloudY = Math.random(); // 0→1 mapped to smoke band
+      const seed = Math.floor(Math.random() * 99999);
+
+      // Generate cauliflower blobs — same system as gas clouds
+      const blobs = [];
+      const perimCount = 6 + Math.floor(Math.random() * 5);
+      for (let j = 0; j < perimCount; j++) {
+        const angle = (j / perimCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
+        const radialDist = 0.3 + Math.random() * 0.2;
+        blobs.push({
+          cx: 0.5 + Math.cos(angle) * radialDist,
+          cy: 0.45 + Math.sin(angle) * (radialDist * 0.75),
+          rx: 0.12 + Math.random() * 0.22,
+          ry: 0.1 + Math.random() * 0.18,
+          bright: 0.2 + Math.random() * 0.4
+        });
+      }
+      // Extra side blobs for wider spread
+      for (let j = 0; j < 4; j++) {
+        const side = Math.random() < 0.5 ? 0.02 + Math.random() * 0.15 : 0.83 + Math.random() * 0.15;
+        blobs.push({ cx: side, cy: 0.15 + Math.random() * 0.6, rx: 0.1 + Math.random() * 0.15, ry: 0.08 + Math.random() * 0.16, bright: 0.15 + Math.random() * 0.35 });
+      }
+      // Interior + core blobs
+      for (let j = 0; j < 5; j++) {
+        blobs.push({ cx: 0.12 + Math.random() * 0.76, cy: 0.12 + Math.random() * 0.65, rx: 0.12 + Math.random() * 0.24, ry: 0.1 + Math.random() * 0.2, bright: 0.4 + Math.random() * 0.6 });
+      }
+      for (let j = 0; j < 3; j++) {
+        blobs.push({ cx: 0.25 + Math.random() * 0.5, cy: 0.2 + Math.random() * 0.4, rx: 0.15 + Math.random() * 0.18, ry: 0.12 + Math.random() * 0.16, bright: 0.6 + Math.random() * 0.4 });
+      }
+
+      // Pre-generate shape grid
+      const cols = Math.ceil(cloudW / P);
+      const rows = Math.ceil(cloudH / P);
+      const shape = [];
+      const brightness = [];
+      for (let r = 0; r < rows; r++) {
+        shape[r] = [];
+        brightness[r] = [];
+        for (let c = 0; c < cols; c++) {
+          const nx = c / cols;
+          const ny = r / rows;
+          let maxDensity = 0;
+          let maxBright = 0;
+          for (const blob of blobs) {
+            const dx = (nx - blob.cx) / blob.rx;
+            const dy = (ny - blob.cy) / blob.ry;
+            const d = dx * dx + dy * dy;
+            if (d < 1) {
+              const density = 1 - d;
+              if (density > maxDensity) maxDensity = density;
+              maxBright = Math.max(maxBright, density * blob.bright);
+            }
+          }
+          const edgeDistX = Math.min(nx, 1 - nx);
+          const edgeDistY = Math.min(ny, 1 - ny);
+          const edgeFalloff = Math.min(1, Math.min(edgeDistX, edgeDistY) * 12);
+          const h = ((c * 17 + r * 31 + seed) * 2654435761 >>> 16) & 0xFFFF;
+          const h2 = ((c * 53 + r * 97 + seed * 3) * 2654435761 >>> 16) & 0xFFFF;
+          const bigNoise = (h / 65536) * 0.35;
+          const fineNoise = (h2 / 65536) * 0.15;
+          shape[r][c] = (maxDensity * edgeFalloff) > 0.1 + bigNoise + fineNoise ? 1 : 0;
+          brightness[r][c] = maxBright;
+        }
+      }
+
+      summitSmokeClouds.push({
+        baseX: cloudX, yFrac: cloudY, w: cloudW, h: cloudH,
+        speed: cfg.speed + Math.random() * 0.3,
+        dir: cfg.layer === 2 ? 1 : (cfg.layer === 1 ? -1 : 0), // bg=0, mid=left, fg=right
+        phase: Math.random() * Math.PI * 2,
+        seed, shape, brightness, cols, rows,
+        offsetX: 0,
+        layer: cfg.layer,
+        layerAlpha: cfg.alpha
+      });
+    }
+  }
+}
+
+function drawSummitSmokeLayer(smokeTop, smokeBot, P, drawLayer) {
+  // drawLayer: 0 = background, 1 = mid, 2 = foreground
+  const smokeBandHeight = smokeBot - smokeTop;
+  if (smokeBandHeight <= 0) return;
+
+  for (const cloud of summitSmokeClouds) {
+    if (cloud.layer !== drawLayer) continue;
+
+    // Update movement
+    if (cloud.dir !== 0) {
+      cloud.offsetX += cloud.speed * cloud.dir;
+      // Wrap around when drifting off screen
+      const cx2 = cloud.baseX + cloud.offsetX;
+      if (cloud.dir < 0 && cx2 + cloud.w < -100) cloud.offsetX += W + cloud.w + 200;
+      if (cloud.dir > 0 && cx2 > W + 100) cloud.offsetX -= W + cloud.w + 200;
+    }
+
+    // Background layer: gentle hover/bob in place
+    let bobY = 0;
+    if (cloud.layer === 0) {
+      bobY = Math.sin(frameCount * 0.008 + cloud.phase) * 12;
+    }
+
+    const cx = cloud.baseX + cloud.offsetX;
+    // yFrac 0→1 maps within the smoke band
+    const sy = smokeTop + cloud.yFrac * smokeBandHeight - cloud.h * 0.5 + bobY;
+    const pulse = Math.sin(frameCount * 0.015 + cloud.phase) * 0.08 + 0.92;
+
+    for (let r = 0; r < cloud.rows; r++) {
+      for (let c = 0; c < cloud.cols; c++) {
+        if (!cloud.shape[r][c]) continue;
+        const bx = cx + c * P;
+        const by = sy + r * P;
+        if (bx + P < 0 || bx > W || by + P < 0 || by > H) continue;
+
+        const br = cloud.brightness[r][c];
+
+        let neighbors = 0;
+        if (r > 0 && cloud.shape[r-1][c]) neighbors++;
+        if (r < cloud.rows-1 && cloud.shape[r+1][c]) neighbors++;
+        if (c > 0 && cloud.shape[r][c-1]) neighbors++;
+        if (c < cloud.cols-1 && cloud.shape[r][c+1]) neighbors++;
+        if (r > 0 && c > 0 && cloud.shape[r-1][c-1]) neighbors += 0.5;
+        if (r > 0 && c < cloud.cols-1 && cloud.shape[r-1][c+1]) neighbors += 0.5;
+        if (r < cloud.rows-1 && c > 0 && cloud.shape[r+1][c-1]) neighbors += 0.5;
+        if (r < cloud.rows-1 && c < cloud.cols-1 && cloud.shape[r+1][c+1]) neighbors += 0.5;
+        const edgeFade = Math.min(1, neighbors / 4);
+
+        const h = ((c * 17 + r * 31 + cloud.seed) * 2654435761 >>> 16) & 0xFF;
+        const flicker = ((c * 7 + r * 13 + Math.floor(frameCount * 0.04)) * 2654435761 >>> 20) & 0x7;
+
+        // Grey/black palette — lighter cores, darker edges
+        let red, green, blue;
+        if (br > 0.7) {
+          red = 65 + flicker * 2; green = 62 + flicker * 2; blue = 68 + flicker * 2;
+        } else if (br > 0.5) {
+          red = 48 + flicker; green = 45 + flicker; blue = 50 + flicker;
+        } else if (br > 0.3) {
+          red = 32 + flicker; green = 30 + flicker; blue = 35 + flicker;
+        } else if (br > 0.15) {
+          red = 18 + flicker; green = 16 + flicker; blue = 20 + flicker;
+        } else {
+          red = 8 + flicker; green = 7 + flicker; blue = 10 + flicker;
+        }
+        if (h % 5 === 0 && br > 0.2) { red += 12; green += 10; blue += 14; }
+        if (h % 7 === 0 && br < 0.4) { red -= 4; green -= 4; blue -= 4; }
+
+        const alpha = pulse * Math.min(1, br * 1.5 + 0.25) * cloud.layerAlpha * edgeFade;
+        ctx.fillStyle = `rgba(${Math.max(0, Math.min(255, red))}, ${Math.max(0, Math.min(255, green))}, ${Math.max(0, Math.min(255, blue))}, ${alpha.toFixed(3)})`;
+        ctx.fillRect(bx, by, P, P);
+      }
+    }
+  }
+}
+
+function drawClimbLedges() {
+  const P = 4; // same pixel grid as volcanic ground
+  // Same palette as drawVolcanicGround
+  const PAL = {
+    deep: '#0c0604', dark: '#160d08', mid: '#24160e',
+    surface: '#362010', light: '#4a2e1a', edge: '#5c3820',
+    shadow: '#080402', lavaD: '#882200', lava: '#cc4400',
+    lavaB: '#ff6600', lavaH: '#ffaa22'
+  };
+
+  for (const ledge of climbLedges) {
+    const sy = climbScreenY(ledge.worldY);
+    if (sy < -60 || sy > H + 40) continue;
+    const sx = ledge.worldX;
+    const seed = ledge.seed;
+
+    if (ledge.isSummit) {
+      // Summit ledge — same rock outcropping graphic as normal platforms
+    }
+    {
+      // ── ROCK OUTCROPPING — same style as volcanic ground rocks ──
+      const cols = Math.ceil(ledge.w / P);
+      const baseRows = Math.ceil(ledge.h / P);
+      const isLeft = sx < W / 2; // outcroppings jut from nearer wall
+
+      for (let col = 0; col < cols; col++) {
+        const h = ((col * 17 + seed) * 2654435761 >>> 16);
+        // Jagged top surface — 0-3 blocks above baseline
+        const edgeFade = isLeft
+          ? Math.max(0, 1 - col / (cols * 0.15))   // taper left edge
+          : Math.max(0, 1 - (cols - 1 - col) / (cols * 0.15)); // taper right edge
+        const midBulge = 1 - Math.abs((col / cols) * 2 - 1) * 0.5; // higher in middle
+        const peakBlocks = Math.floor((h % 3) * midBulge * (1 - edgeFade * 0.8));
+
+        // Peak pixels above baseline
+        for (let b = 0; b < peakBlocks; b++) {
+          const by = sy - (b + 1) * P;
+          ctx.fillStyle = b === 0 ? ((h >> 3) % 2 ? PAL.light : PAL.edge) : PAL.surface;
+          ctx.fillRect(sx + col * P, by, P, P);
+        }
+
+        // Top surface row — highlight
+        ctx.fillStyle = (h % 4 === 0) ? PAL.edge : (h % 3 === 0) ? PAL.light : PAL.surface;
+        ctx.fillRect(sx + col * P, sy, P, P);
+
+        // Body rows — banded like volcanic ground
+        for (let row = 1; row < baseRows + 2; row++) {
+          const bh = ((col * 13 + row * 7 + seed) * 2654435761 >>> 20);
+          let color;
+          if (row <= 1) color = bh % 2 === 0 ? PAL.surface : PAL.mid;
+          else if (row <= 3) color = bh % 3 === 0 ? PAL.mid : PAL.dark;
+          else color = bh % 2 === 0 ? PAL.dark : PAL.deep;
+          ctx.fillStyle = color;
+          ctx.fillRect(sx + col * P, sy + row * P, P, P);
+        }
+
+        // Crevice/crack detail
+        if ((h & 7) === 0 && col > 1 && col < cols - 1) {
+          ctx.fillStyle = PAL.shadow;
+          ctx.fillRect(sx + col * P, sy + P, P, P * 2);
+        }
+      }
+
+      // Lava vein glow underneath — subtle
+      const veinPulse = Math.sin(frameCount * 0.03 + seed) * 0.08 + 0.06;
+      ctx.fillStyle = `rgba(200, 60, 0, ${veinPulse})`;
+      ctx.fillRect(sx + P * 2, sy + ledge.h + P, ledge.w - P * 4, P);
+
+      // Shadow underneath
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+      for (let col = 1; col < cols - 1; col++) {
+        const sh = ((col * 11 + seed) * 2654435761 >>> 18);
+        const shadowLen = 2 + (sh % 3);
+        for (let s = 0; s < shadowLen; s++) {
+          ctx.fillRect(sx + col * P, sy + ledge.h + s * P, P, P);
+        }
+      }
+    }
+  }
+}
+
+function drawGasClouds() {
+  const P = 4; // 4px pixel blocks — sharp pixel art
+  for (const cloud of gasClouds) {
+    const sy = climbScreenY(cloud.worldY);
+    if (sy + cloud.h < -80 || sy > H + 80) continue;
+
+    // Consistent horizontal travel
+    cloud.offsetX += cloud.speed * cloud.dir;
+    const sx = cloud.worldX + cloud.offsetX;
+    const pulse = Math.sin(frameCount * 0.02 + cloud.phase) * 0.1 + 0.9;
+    const baseAlpha = cloud.density * pulse;
+
+    // ── Cauliflower cloud body — with edge alpha fade for organic shapes ──
+    for (let r = 0; r < cloud.rows; r++) {
+      for (let c = 0; c < cloud.cols; c++) {
+        if (!cloud.shape[r][c]) continue;
+        const bx = sx + c * P;
+        const by = sy + r * P;
+        if (bx + P < 0 || bx > W || by + P < 0 || by > H) continue;
+
+        const br = cloud.brightness[r][c]; // 0-1, higher = brighter core
+
+        // Count neighboring filled cells — edge cells have fewer neighbors
+        let neighbors = 0;
+        if (r > 0 && cloud.shape[r-1][c]) neighbors++;
+        if (r < cloud.rows-1 && cloud.shape[r+1][c]) neighbors++;
+        if (c > 0 && cloud.shape[r][c-1]) neighbors++;
+        if (c < cloud.cols-1 && cloud.shape[r][c+1]) neighbors++;
+        // Diagonal neighbors for smoother corners
+        if (r > 0 && c > 0 && cloud.shape[r-1][c-1]) neighbors += 0.5;
+        if (r > 0 && c < cloud.cols-1 && cloud.shape[r-1][c+1]) neighbors += 0.5;
+        if (r < cloud.rows-1 && c > 0 && cloud.shape[r+1][c-1]) neighbors += 0.5;
+        if (r < cloud.rows-1 && c < cloud.cols-1 && cloud.shape[r+1][c+1]) neighbors += 0.5;
+        // Edge fade: cells with few neighbors are more transparent
+        const edgeFade = Math.min(1, neighbors / 4);
+
+        const h = ((c * 17 + r * 31 + cloud.seed) * 2654435761 >>> 16) & 0xFF;
+        const flicker = ((c * 7 + r * 13 + Math.floor(frameCount * 0.06)) * 2654435761 >>> 20) & 0x7;
+
+        // Vivid green palette matching reference — bright cores, darker edges
+        let red, green, blue;
+        if (br > 0.7) {
+          // Hot core — bright yellow-green (like reference center)
+          red = 200 + flicker * 3; green = 255; blue = 80 + flicker * 4;
+        } else if (br > 0.5) {
+          // Bright lime green
+          red = 140 + flicker * 2; green = 240 + Math.min(15, flicker * 2); blue = 40 + flicker;
+        } else if (br > 0.3) {
+          // Mid green — vivid
+          red = 80 + flicker; green = 200 + flicker * 2; blue = 20 + flicker;
+        } else if (br > 0.15) {
+          // Darker green edge
+          red = 40 + flicker; green = 140 + flicker * 2; blue = 10;
+        } else {
+          // Outer fringe — dark green
+          red = 20 + flicker; green = 80 + flicker; blue = 5;
+        }
+
+        // Per-pixel variation from hash
+        if (h % 5 === 0 && br > 0.2) { red += 20; green += 10; } // bright speckle
+        if (h % 7 === 0 && br < 0.4) { green -= 15; } // dark speckle
+
+        const alpha = baseAlpha * Math.min(1, br * 1.5 + 0.25) * 0.7 * edgeFade;
+        ctx.fillStyle = `rgba(${Math.min(255, red)}, ${Math.min(255, green)}, ${Math.min(255, blue)}, ${alpha.toFixed(3)})`;
+        ctx.fillRect(bx, by, P, P);
+      }
+    }
+
+    // ── Soft glow overlay on cores ── (radial, no hard rectangles)
+    for (let r = 1; r < cloud.rows - 1; r += 2) {
+      for (let c = 1; c < cloud.cols - 1; c += 2) {
+        if (!cloud.shape[r][c]) continue;
+        const br = cloud.brightness[r][c];
+        if (br < 0.55) continue;
+        const bx = sx + c * P + P / 2;
+        const by = sy + r * P + P / 2;
+        if (bx < 0 || bx > W || by < 0 || by > H) continue;
+        const glowA = (br - 0.5) * baseAlpha * 0.4;
+        const glowR = P * 2;
+        const grad = ctx.createRadialGradient(bx, by, 0, bx, by, glowR);
+        grad.addColorStop(0, `rgba(220, 255, 120, ${glowA.toFixed(3)})`);
+        grad.addColorStop(1, `rgba(220, 255, 120, 0)`);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(bx, by, glowR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // ── Floating luminous bubbles ── (round, like reference image)
+    for (const bub of cloud.bubbles) {
+      const bobX = Math.sin(frameCount * 0.015 + bub.phase) * 12;
+      const bobY = Math.cos(frameCount * 0.012 + bub.phase * 1.3) * 8;
+      const bx = sx + bub.nx * cloud.w + bobX;
+      const by = sy + bub.ny * cloud.h + bobY;
+      if (bx < 0 || bx > W || by < 0 || by > H) continue;
+      const r = bub.r + 1;
+      const bubAlpha = baseAlpha * 0.55;
+      // Outer glow
+      ctx.beginPath();
+      ctx.arc(bx, by, r + 2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(140, 220, 60, ${(bubAlpha * 0.3).toFixed(3)})`;
+      ctx.fill();
+      // Bright bubble body
+      ctx.beginPath();
+      ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(180, 255, 80, ${bubAlpha.toFixed(3)})`;
+      ctx.fill();
+      // Bright center
+      ctx.beginPath();
+      ctx.arc(bx, by, r * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(230, 255, 150, ${(bubAlpha * 0.8).toFixed(3)})`;
+      ctx.fill();
+      // Highlight speck
+      ctx.beginPath();
+      ctx.arc(bx - r * 0.25, by - r * 0.25, r * 0.2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 255, 200, ${(bubAlpha * 0.5).toFixed(3)})`;
+      ctx.fill();
+    }
+
+  }
+}
+
 // ── LAVA DROP SPAWNING ──
 // All lava objects use WORLD coordinates (worldX).
 // Screen position = worldX - scrollOffset
 function spawnLavaDrop() {
+  // Vertical mode — drops fall at random screen X positions
+  if (verticalMode) {
+    const dropX = 40 + Math.random() * (W - 80);
+    warningMarkers.push({ worldX: dropX + scrollOffset, life: 45, maxLife: 45 });
+    setTimeout(() => {
+      if (gameState !== 'playing') return;
+      lavaDrops.push({
+        worldX: dropX + scrollOffset,
+        y: -20,
+        vy: 4 + Math.random() * 3,
+        size: 6 + Math.random() * 6
+      });
+    }, 600);
+    return;
+  }
   let screenTargetX;
-  if (level === 5) {
+  if (level === 6) {
+    // Level 2-3: drops on right 1/3 of screen
+    screenTargetX = W * 0.67 + Math.random() * (W * 0.31);
+  } else if (level === 5) {
     // Level 2-2: drops spread across right 40% of screen
     screenTargetX = W * 0.6 + Math.random() * (W * 0.38);
   } else if (isVolcanoLevel()) {
@@ -1609,6 +2522,9 @@ const KONAMI_SEQ = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','Arr
 let konamiIndex = 0;
 let konamiActive = false; // true after code entered, waiting for level number
 let konamiUsed = false;   // true if player used konami to reach a level (score stays 0)
+const CHEAT_WORD = ['KeyC','KeyH','KeyE','KeyA','KeyT'];
+let cheatIndex = 0;
+let cheatActivated = false;
 let showHelpOverlay = false; // toggle with ? key
 
 window.addEventListener('keydown', e => {
@@ -1666,7 +2582,7 @@ window.addEventListener('keydown', e => {
   // Konami code detection — enter code, then press 1/2/3 to jump to level
   if (konamiActive) {
     // Waiting for level number after code was entered
-    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : e.code === 'Digit5' ? 5 : 0;
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : e.code === 'Digit5' ? 5 : e.code === 'Digit6' ? 6 : 0;
     if (levelNum > 0) {
       konamiActive = false;
       konamiUsed = true;
@@ -1680,7 +2596,7 @@ window.addEventListener('keydown', e => {
       // Set up level
       level = levelNum;
       score = 0;
-      lives = MAX_LIVES;
+      lives = cheatActivated ? 30 : MAX_LIVES;
       levelDuration = 1800 + level * 300;
       levelTimer = 0;
       frameCount = 0;
@@ -1706,10 +2622,12 @@ window.addEventListener('keydown', e => {
         generateStreetLamps();
       }
       if (levelNum >= 4) {
-        generateTrees();
+        if (levelNum !== 6) generateTrees();
+        else trees = [];
         generateRuins();
         generateBurningVillage();
         if (levelNum === 5) generateLavaPits();
+        if (levelNum === 6) { generateLavaPits(); generateClimbLedges(); generateGasClouds(); generateSummitSmoke(); }
       }
       gameState = 'playing';
       musicStarted = true;
@@ -1729,7 +2647,7 @@ window.addEventListener('keydown', e => {
       // Set up victory/story scroll state
       level = 3;
       score = 0;
-      lives = MAX_LIVES;
+      lives = cheatActivated ? 30 : MAX_LIVES;
       gameState = 'victory';
       storyScrollY = 0;
       storyScrollDone = false;
@@ -1738,7 +2656,26 @@ window.addEventListener('keydown', e => {
       victoryMusic.play().catch(() => {});
       return;
     }
-    // Any non-number/S key cancels konami
+    // Track CHEAT word input after konami code
+    if (e.code === CHEAT_WORD[cheatIndex]) {
+      cheatIndex++;
+      if (cheatIndex >= CHEAT_WORD.length) {
+        // CHEAT activated — 30 lives!
+        cheatIndex = 0;
+        cheatActivated = true;
+        konamiActive = false;
+        konamiUsed = true;
+        lives = 30;
+        // Flash effect
+        shakeTimer = 15;
+        spawnParticles(W / 2, H / 2, '#ffff00', 30, 8);
+        spawnParticles(W / 2, H / 2, '#ff4400', 20, 6);
+        return;
+      }
+      return; // keep konamiActive, waiting for rest of CHEAT or level number
+    }
+    // Any non-number/S/CHEAT-letter key cancels konami
+    cheatIndex = 0;
     konamiActive = false;
     // fall through to normal input handling
   }
@@ -1746,7 +2683,8 @@ window.addEventListener('keydown', e => {
     konamiIndex++;
     if (konamiIndex >= KONAMI_SEQ.length) {
       konamiIndex = 0;
-      konamiActive = true; // waiting for level number
+      cheatIndex = 0; // reset CHEAT word tracking
+      konamiActive = true; // waiting for level number or CHEAT word
       return;
     }
   } else {
@@ -1792,6 +2730,7 @@ window.addEventListener('keydown', e => {
 
   if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
     e.preventDefault();
+    if (e.repeat) return; // no continuous jump from holding the button
     if ((gameState === 'menu' || gameState === 'levelComplete') && e.code !== 'ArrowUp') {
       startGame();
     } else if (gameState === 'dead' && deathTimer >= DEATH_RESTART_DELAY) {
@@ -1807,6 +2746,17 @@ window.addEventListener('keydown', e => {
       menuScrollY = -480;
       titleMusic.currentTime = 0;
       titleMusic.play().catch(() => {});
+    } else if (gameState === 'playing' && summitWaitingForInput && !summitJumping && !summitConfirmed) {
+      // Jump HIGH into the volcano — jump straight up from current position
+      // Player draws in FRONT of the mountain on the way up, then BEHIND once past the peak
+      summitJumping = true;
+      summitJumpTimer = 0;
+      player.vx = 0;
+      player.vy = JUMP_FORCE * 1.6; // big arc up
+      player.grounded = false;
+      player.jumping = true;
+      player.doubleJumped = false;
+      spawnParticles(player.x + player.w / 2, player.y + player.h, '#ffcc44', 16, 5);
     } else if (gameState === 'dojo') {
       jumpBuffered = true;
     } else {
@@ -1934,6 +2884,17 @@ canvas.addEventListener('touchstart', e => {
   if (gameState === 'dead') { respawnPlayer(); return; }
   if (gameState === 'gameover') { startGame(); return; }
   if (gameState !== 'playing' && gameState !== 'dojo') { startGame(); return; }
+  if (summitWaitingForInput && !summitJumping && !summitConfirmed) {
+    summitJumping = true;
+    summitJumpTimer = 0;
+    player.vx = 0;
+    player.vy = JUMP_FORCE * 1.6;
+    player.grounded = false;
+    player.jumping = true;
+    player.doubleJumped = false;
+    spawnParticles(player.x + player.w / 2, player.y + player.h, '#ffcc44', 16, 5);
+    return;
+  }
   jumpBuffered = true;
 });
 canvas.addEventListener('mousedown', () => {
@@ -1952,6 +2913,17 @@ canvas.addEventListener('mousedown', () => {
   if (gameState === 'dead') { respawnPlayer(); return; }
   if (gameState === 'gameover') { startGame(); return; }
   if (gameState !== 'playing' && gameState !== 'dojo') { startGame(); return; }
+  if (summitWaitingForInput && !summitJumping && !summitConfirmed) {
+    summitJumping = true;
+    summitJumpTimer = 0;
+    player.vx = 0;
+    player.vy = JUMP_FORCE * 1.6;
+    player.grounded = false;
+    player.jumping = true;
+    player.doubleJumped = false;
+    spawnParticles(player.x + player.w / 2, player.y + player.h, '#ffcc44', 16, 5);
+    return;
+  }
   jumpBuffered = true;
 });
 
@@ -1968,6 +2940,26 @@ function clearGameState() {
   explosions = [];
   vehicleDebris = [];
   lavaPits = [];
+  climbLedges = [];
+  gasClouds = [];
+  climbBirds = [];
+  summitReached = false;
+  summitTimer = 0;
+  summitWaitingForInput = false;
+  summitConfirmed = false;
+  summitJumping = false;
+  summitJumpTimer = 0;
+  summitPlayerAlpha = 1;
+  summitJumpPastApex = false;
+  summitApexPlayerY = 0;
+  summitPostApexFrames = 0;
+  if (typeof player !== 'undefined' && player) player._summitBurstFired = false;
+  eruptionParticles = [];
+  cliffTransition = 0; cliffWorldX = 0;
+  verticalMode = false;
+  scrollOffsetY = 0;
+  playerWorldY = 0;
+  gasExposure = 0;
   shakeTimer = 0;
   flashTimer = 0;
   deathTimer = 0;
@@ -1991,14 +2983,14 @@ function clearGameState() {
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
-    level = Math.min(level + 1, 5);
+    level = Math.min(level + 1, 6);
     levelDuration = 1800 + level * 300;
   } else {
     level = 1;
     score = 0;
-    lives = MAX_LIVES;
+    lives = cheatActivated ? 30 : MAX_LIVES;
     levelDuration = 1800;
-    konamiUsed = false; // reset cheat flag on normal game start
+    if (!cheatActivated) konamiUsed = false; // reset cheat flag on normal game start
     totalAttempts++;
   }
   gameState = 'transition';
@@ -2065,19 +3057,50 @@ function startGame() {
     generateStreetLamps();
   }
   if (isVolcanoLevel()) {
-    generateTrees();
+    if (level !== 6) generateTrees();
+    else trees = []; // clear leftover trees from previous level
     generateRuins();
     generateBurningVillage();
     if (level === 5) generateLavaPits();
+    if (level === 6) { generateLavaPits(); generateClimbLedges(); generateGasClouds(); generateSummitSmoke(); }
   }
+  // Reset level 2-3 vertical state
+  verticalMode = false;
+  cliffTransition = 0; cliffWorldX = 0;
+  scrollOffsetY = 0;
+  playerWorldY = 0;
+  gasExposure = 0;
 }
 
 function respawnPlayer() {
   // Continue the level with one less life
   gameState = 'playing';
   deathTimer = 0;
-  player.x = 150;
-  player.y = getGroundY(150 + scrollOffset) - SPRITE_H;
+  gasExposure = 0;
+  if (verticalMode) {
+    // Respawn on nearest visible ledge, or on the ground if near bottom
+    const groundScreenY = climbScreenY(0);
+    let respawnedOnLedge = false;
+    for (const ledge of climbLedges) {
+      const ly = climbScreenY(ledge.worldY);
+      if (ly > H * 0.1 && ly < H * 0.75) {
+        player.x = ledge.worldX + ledge.w / 2 - player.w / 2;
+        player.y = ly - SPRITE_H;
+        respawnedOnLedge = true;
+        break;
+      }
+    }
+    if (!respawnedOnLedge) {
+      // Respawn on ground
+      player.x = W / 2 - player.w / 2;
+      player.y = groundScreenY - SPRITE_H;
+      // Reset camera to ground level
+      scrollOffsetY = 0;
+    }
+  } else {
+    player.x = 150;
+    player.y = getGroundY(150 + scrollOffset) - SPRITE_H;
+  }
   player.vy = 0;
   player.vx = 0;
   player.grounded = true;
@@ -2110,9 +3133,45 @@ function update() {
   if (gameState !== 'playing') return;
 
   frameCount++;
-  levelTimer++;
-  scrollOffset += RUN_SPEED;
+  levelTimer++; // timer runs throughout — progress bar drives the climb
+
+  // Level 2-3: smooth transition from horizontal to vertical
+  if (level === 6 && !verticalMode) {
+    const progress = levelTimer / levelDuration;
+    if (progress >= VERTICAL_TRANSITION_PROGRESS && progress < CLIFF_TRANSITION_PROGRESS) {
+      // First frame of transition: place the cliff wall ahead in world space
+      if (cliffTransition === 0) {
+        // Place cliff so it fully fills the screen by end of transition
+        // Transition = 10% of levelDuration at RUN_SPEED pixels/frame
+        const transitionFrames = (CLIFF_TRANSITION_PROGRESS - VERTICAL_TRANSITION_PROGRESS) * levelDuration;
+        const totalScroll = transitionFrames * RUN_SPEED;
+        // Cliff left edge needs to reach x=0 on screen, so place it totalScroll pixels ahead
+        cliffWorldX = scrollOffset + totalScroll;
+      }
+      cliffTransition = (progress - VERTICAL_TRANSITION_PROGRESS) / (CLIFF_TRANSITION_PROGRESS - VERTICAL_TRANSITION_PROGRESS);
+    } else if (progress >= CLIFF_TRANSITION_PROGRESS) {
+      verticalMode = true;
+      cliffTransition = 1;
+      // Keep player where they are — just set up vertical mode state
+      playerWorldY = 0;
+      scrollOffsetY = 0;
+      // Convert current player Y to vertical mode coordinate system
+      player.y = climbScreenY(0) - SPRITE_H;
+      player.vy = 0;
+      player.grounded = true;
+    }
+  }
+
+  if (verticalMode) {
+    // Camera update moved to AFTER collision resolution (see below)
+    // Just update playerWorldY for score tracking
+    playerWorldY = (player.y + player.h) - (H - CLIMB_GROUND_Y) + scrollOffsetY;
+  } else {
+    scrollOffset += RUN_SPEED;
+  }
+
   if (player.invincible > 0) player.invincible--;
+  if (player.knockbackTimer > 0) player.knockbackTimer--;
 
   // Village transition — last 600 frames (~10 seconds) of level 3
   const VILLAGE_LEAD_IN = 600;
@@ -2125,10 +3184,159 @@ function update() {
     villageProgress = 0;
   }
 
-  // Level complete?
-  if (levelTimer >= levelDuration) {
+  // Level 2-3 completion: player must physically reach the summit ledge (set in collision code above)
+  if (summitReached) {
+    summitTimer++;
+    if (!summitJumping) {
+      // Freeze player on the summit ledge until they press jump
+      player.vx = 0;
+      player.vy = 0;
+      player.grounded = true;
+      // After brief pause, show prompt and wait for input
+      if (summitTimer >= SUMMIT_PAUSE_FRAMES && !summitWaitingForInput) {
+        summitWaitingForInput = true;
+      }
+    } else {
+      // Player is launching high into the air, then falling into the crater.
+      // Rendering logic (in draw()):
+      //   - While ascending (summitJumpPastApex === false) → drawn in FRONT of mountain
+      //   - Once past apex (summitJumpPastApex === true)   → drawn BEHIND mountain,
+      //     placed visually at the TOP of the jump so it snaps into the back layer there
+      summitJumpTimer++;
+
+      // Apply gravity — no X repositioning, player falls straight down from wherever they jumped
+      player.vy += 0.5;
+      player.vy = Math.min(16, player.vy);
+      player.y += player.vy;
+      player.vx = 0;
+      player.grounded = false;
+      player.jumping = true;
+
+      // Detect apex: velocity has flipped from negative (rising) to non-negative (falling)
+      if (!summitJumpPastApex && player.vy >= 0) {
+        summitJumpPastApex = true;
+        summitApexPlayerY = player.y; // snap-to-back-layer position
+        summitPostApexFrames = 0;
+        // Fire the big eruption burst at the apex — the moment we swap to the back layer
+        if (!player._summitBurstFired) {
+          player._summitBurstFired = true;
+          const lipScreenY = climbScreenY(-CLIMB_TOTAL_HEIGHT);
+          for (let i = 0; i < 30; i++) {
+            eruptionParticles.push({
+              x: W * 0.5 + (Math.random() - 0.5) * 60,
+              y: lipScreenY,
+              vx: (Math.random() - 0.5) * 10,
+              vy: -(10 + Math.random() * 12),
+              size: 4 + Math.random() * 6,
+              life: 80 + Math.random() * 40,
+              maxLife: 120,
+              heat: 0.9 + Math.random() * 0.1,
+              type: 'spark'
+            });
+          }
+          shakeTimer = 30;
+          flashTimer = 20;
+        }
+      }
+
+      // Sparks trail from the falling player (only after apex, for drama)
+      if (summitJumpPastApex && summitJumpTimer % 2 === 0) {
+        spawnParticles(player.x + player.w / 2, player.y + player.h * 0.6, '#ff8844', 3, 3);
+      }
+
+      // Fade out only AFTER apex — player stays fully visible on the way up
+      if (summitJumpPastApex) {
+        summitPostApexFrames++;
+        const FADE_FRAMES = 22;
+        summitPlayerAlpha = Math.max(0, 1 - summitPostApexFrames / FADE_FRAMES);
+      } else {
+        summitPlayerAlpha = 1;
+      }
+
+      // Only trigger level completion after the player has fully disappeared
+      if (!summitConfirmed && summitJumpPastApex && summitPlayerAlpha <= 0.01) {
+        summitConfirmed = true;
+      }
+    }
+
+    // Spawn eruption particles from the volcano lip
+    // Lip width at summit: taperAmount = 0.15, so lip spans ~85% of screen
+    const eruptLipLeft = 0.15 * W * 0.5;
+    const eruptLipRight = W - 0.15 * W * 0.5;
+    const eruptLipWidth = (eruptLipRight - eruptLipLeft) * 0.9; // 90% of lip
+    const eruptLipCenter = (eruptLipLeft + eruptLipRight) / 2;
+    const eruptY = climbScreenY(-CLIMB_TOTAL_HEIGHT);
+
+    // Burst of sparks initially, then steady stream (original behavior)
+    const spawnCount = summitTimer < 30 ? 8 : 3;
+    for (let i = 0; i < spawnCount; i++) {
+      eruptionParticles.push({
+        x: eruptLipCenter + (Math.random() - 0.5) * eruptLipWidth,
+        y: eruptY,
+        vx: (Math.random() - 0.5) * 4,
+        vy: -(6 + Math.random() * 10),
+        size: 3 + Math.random() * 5,
+        life: 60 + Math.random() * 60,
+        maxLife: 60 + Math.random() * 60,
+        heat: 0.5 + Math.random() * 0.5,
+        type: 'spark'
+      });
+    }
+
+    // THICK LAVA FLARES — sparse, from INSIDE the volcano, shooting up out of the frame
+    // Spawn well below the visible lip so they appear to rise from within the crater
+    const flareY = Math.min(H - 20, (player.y + player.h) + 60);
+    const flareCenter = W * 0.5;
+    const flareWidth = W * 0.22;
+    // Sparse: one flare every few frames
+    if (frameCount % 12 === 0) {
+      eruptionParticles.push({
+        x: flareCenter + (Math.random() - 0.5) * flareWidth,
+        y: flareY,
+        vx: (Math.random() - 0.5) * 1.5,
+        vy: -(16 + Math.random() * 6), // FAST — shoots up out of frame
+        size: 12 + Math.random() * 14,
+        life: 120,
+        maxLife: 120,
+        heat: 0.9 + Math.random() * 0.1,
+        type: 'flare'
+      });
+    }
+    // Occasional huge blob — even rarer
+    if (frameCount % 35 === 0) {
+      eruptionParticles.push({
+        x: flareCenter + (Math.random() - 0.5) * (flareWidth * 0.5),
+        y: flareY,
+        vx: (Math.random() - 0.5) * 1.2,
+        vy: -(18 + Math.random() * 5),
+        size: 20 + Math.random() * 10,
+        life: 140,
+        maxLife: 140,
+        heat: 1.0,
+        type: 'drop'
+      });
+    }
+  }
+
+  // Update eruption particles (always, so they finish even after confirm)
+  for (let i = eruptionParticles.length - 1; i >= 0; i--) {
+    const p = eruptionParticles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15; // gravity pulls them back down
+    p.vx *= 0.99;  // slight air drag
+    p.life--;
+    if (p.life <= 0 || p.y > H + 20) {
+      eruptionParticles.splice(i, 1);
+    }
+  }
+
+  const levelComplete = verticalMode
+    ? (summitReached && summitWaitingForInput && summitConfirmed)
+    : (levelTimer >= levelDuration);
+  if (levelComplete) {
     if (!konamiUsed) score += level * 1000;
-    if (level >= 5) {
+    if (level >= 6) {
       // Stop all gameplay audio
       stopAllLevelMusic();
       stopSiren();
@@ -2153,15 +3361,17 @@ function update() {
     return;
   }
 
-  // Score (always 0 if konami code was used)
+  // Score — timer-based for all modes
   score = konamiUsed ? 0 : Math.floor(levelTimer / 3) + (level - 1) * 1000;
 
   // Spawn lava drops - rate increases with level and time
   // Taper off during village transition (lava stops near the village)
   const levelProgress = levelTimer / levelDuration;
   // Level 2-1: no drops in 2nd half. Level 2-2: no drops in last third
-  const noDrops = (level === 4 && levelProgress >= 0.5) || (level === 5 && levelProgress >= 0.67);
-  const dropRate = level === 5
+  const noDrops = (level === 6 && cliffTransition > 0) || (level === 4 && levelProgress >= 0.5) || (level === 5 && levelProgress >= 0.67);
+  const dropRate = level === 6
+    ? Math.max(100, 180 - levelTimer * 0.005) // 2-3: random drops, moderate rate
+    : level === 5
     ? Math.max(180, 300 - levelTimer * 0.004) // 2-2: very few drops
     : isVolcanoLevel()
     ? Math.max(120, 200 - levelTimer * 0.005) // 2-1: fewer drops
@@ -2173,10 +3383,10 @@ function update() {
 
   // Handle jump — uncrouch first if needed
   if (jumpBuffered) {
-    if (player.crouching) {
+    if (player.crouching && !verticalMode) {
       player.crouching = false;
       player.h = SPRITE_H;
-      player.y = GROUND_Y - player.h;
+      player.y = getGroundY(player.x + scrollOffset) - player.h;
     }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
@@ -2209,8 +3419,8 @@ function update() {
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
 
-  // Crouch — down arrow or S while grounded
-  const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
+  // Crouch — down arrow or S while grounded (disabled in vertical climb)
+  const wantCrouch = !verticalMode && player.grounded && (keys['ArrowDown'] || keys['KeyS']);
   if (wantCrouch && !player.crouching) {
     player.crouching = true;
     player.h = Math.floor(SPRITE_H * 0.5);
@@ -2221,8 +3431,8 @@ function update() {
     player.y = GROUND_Y - player.h;
   }
 
-  // Idle detection — drop lava on player if they don't move for ~1 second
-  const isMoving = moveX !== 0 || !player.grounded || player.kicking;
+  // Idle detection — drop lava on player if they don't move for ~1 second (not in vertical)
+  const isMoving = verticalMode || moveX !== 0 || !player.grounded || player.kicking;
   if (isMoving) {
     player.idleTimer = 0;
   } else {
@@ -2276,7 +3486,7 @@ function update() {
   }
 
   // Street lamp platform collision (check before ground so lamps take priority)
-  if (!isVolcanoLevel()) {
+  if (!isVolcanoLevel() && !verticalMode) {
     for (const lamp of streetLamps) {
       const lsx = lamp.worldX - scrollOffset; // screen x of lamp center
       const platLeft = lsx - lamp.lampW / 2;
@@ -2301,8 +3511,8 @@ function update() {
     }
   }
 
-  // Tree platform collision (level 4)
-  if (isVolcanoLevel()) {
+  // Tree platform collision (volcano horizontal only)
+  if (isVolcanoLevel() && !verticalMode) {
     let onTree = false;
     for (const t of trees) {
       if (t.collapsed || t.layer === 'back') continue; // mid + front trees have platforms
@@ -2425,13 +3635,150 @@ function update() {
   }
 
   // Ground collision
-  const playerGroundY = getGroundY(player.x + scrollOffset);
-  if (player.y + player.h >= playerGroundY) {
-    player.y = playerGroundY - player.h;
-    player.vy = 0;
-    player.grounded = true;
-    player.jumping = false;
-    player.doubleJumped = false;
+  if (verticalMode) {
+    // Skip all surface collisions while diving into the volcano
+    if (summitJumping) {
+      // No ledge/ground collisions — player falls freely through everything
+    } else {
+    // Solid ground at worldY=0
+    const groundScreenY = climbScreenY(0);
+    let onSurface = false;
+
+    // Check ledge collisions
+    for (const ledge of climbLedges) {
+      const ly = climbScreenY(ledge.worldY);
+      if (ly < -50 || ly > H + 50) continue;
+      // Player landing on ledge (falling down, feet at ledge top)
+      if (
+        player.vy >= 0 &&
+        player.x + player.w > ledge.worldX + 4 &&
+        player.x < ledge.worldX + ledge.w - 4 &&
+        player.y + player.h >= ly &&
+        player.y + player.h <= ly + ledge.h + player.vy + 4
+      ) {
+        player.y = ly - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.doubleJumped = false;
+        onSurface = true;
+        // Player reached the summit ledge — trigger level completion
+        if (ledge.isSummit && !summitReached) {
+          summitReached = true;
+          summitTimer = 0;
+        }
+        break;
+      }
+    }
+
+    // Ground collision — solid rocky ground at bottom
+    if (!onSurface && player.vy >= 0 && player.y + player.h >= groundScreenY) {
+      player.y = groundScreenY - player.h;
+      player.vy = 0;
+      player.grounded = true;
+      player.jumping = false;
+      player.doubleJumped = false;
+      onSurface = true;
+    }
+
+    // Fall off bottom of screen (ground has scrolled away) = death
+    if (player.y > H + 50) {
+      die();
+      return;
+    }
+    // Fall off top (scrolled past) — push player down
+    if (player.y < -SPRITE_H * 2) {
+      player.y = -SPRITE_H;
+    }
+
+    // Gas cloud exposure
+    let inGas = false;
+    const pcx = player.x + player.w / 2;
+    const pcy = player.y + player.h / 2;
+    for (const cloud of gasClouds) {
+      const sy = climbScreenY(cloud.worldY);
+      if (sy + cloud.h < 0 || sy > H) continue;
+      const cx = cloud.worldX + (cloud.offsetX || 0) + cloud.w * 0.5;
+      const cy = sy + cloud.h * 0.5;
+      // Elliptical hit test
+      const dx = (pcx - cx) / (cloud.w * 0.45);
+      const dy = (pcy - cy) / (cloud.h * 0.4);
+      if (dx * dx + dy * dy < 1) {
+        inGas = true;
+        break;
+      }
+    }
+    if (inGas) {
+      const prevQuarter = Math.floor(gasExposure / (GAS_KILL_THRESHOLD * 0.25));
+      gasExposure += 0.2;
+      const newQuarter = Math.floor(gasExposure / (GAS_KILL_THRESHOLD * 0.25));
+      if (newQuarter > prevQuarter && newQuarter >= 1 && newQuarter <= 3) {
+        playCough();
+        shakeTimer = 6 + newQuarter * 2;
+        player.knockbackTimer = 15;
+        // Double cough at 75%
+        if (newQuarter === 3) {
+          setTimeout(() => { try { playCough(); } catch(e) {} }, 200);
+        }
+        // Knockback — stumble in a random direction, stronger at higher exposure
+        const knockDir = Math.random() < 0.5 ? -1 : 1;
+        player.x += knockDir * (10 + newQuarter * 6);
+        player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+        player.vy = -4;
+        player.grounded = false;
+        spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#88cc44', 6, 3);
+      }
+      if (gasExposure >= GAS_KILL_THRESHOLD) {
+        die();
+        return;
+      }
+    } else {
+      // Recover when outside gas (but slowly)
+      gasExposure = Math.max(0, gasExposure - 2);
+    }
+    } // end if !summitJumping
+
+    // ── Camera update — driven by progress bar ──
+    // Progress through the vertical section: 0 at transition start, 1 at level end
+    const verticalProgress = Math.min(1, (levelTimer / levelDuration - CLIFF_TRANSITION_PROGRESS) / (1 - CLIFF_TRANSITION_PROGRESS));
+    // Target scroll based on progress bar — smoothly scroll to summit
+    const progressTargetScroll = -CLIMB_TOTAL_HEIGHT * verticalProgress;
+
+    // Also follow player if they're above the progress target (jumped ahead)
+    playerWorldY = (player.y + player.h) - (H - CLIMB_GROUND_Y) + scrollOffsetY;
+    const playerTargetScroll = Math.min(0, playerWorldY + H * 0.4);
+
+    // Use whichever is higher (more scrolled up)
+    const targetScrollY = Math.min(progressTargetScroll, playerTargetScroll);
+
+    const prevScrollY = scrollOffsetY;
+    // Smooth lerp toward target
+    scrollOffsetY += (targetScrollY - scrollOffsetY) * 0.08;
+    if (scrollOffsetY > 0) scrollOffsetY = 0;
+
+    // Shift player and birds by camera delta so they stay at their relative height
+    const scrollDelta = scrollOffsetY - prevScrollY;
+    player.y -= scrollDelta;
+    // Regular birds stay at fixed world height (scroll with camera)
+    // Eagles don't — they swoop at angles independent of camera
+    for (const b of climbBirds) {
+      if (!b.isEagle) {
+        b.y -= scrollDelta;
+        b.baseY -= scrollDelta;
+      }
+    }
+
+    // Update climb birds (fly across, knockback only)
+    updateClimbBirds();
+  } else {
+    const playerGroundY = getGroundY(player.x + scrollOffset);
+    if (player.y + player.h >= playerGroundY) {
+      player.y = playerGroundY - player.h;
+      player.vy = 0;
+      player.grounded = true;
+      player.jumping = false;
+      player.doubleJumped = false;
+    }
   }
 
   // Run animation
@@ -2578,11 +3925,17 @@ function update() {
     }
   }
 
-  // Rolling rocks (level 4)
-  if (isVolcanoLevel()) {
+  // Rolling rocks (volcano horizontal only)
+  // Spawn new rocks only before cliff transition
+  if (isVolcanoLevel() && !verticalMode && !(level === 6 && cliffTransition > 0)) {
     const progress = levelTimer / levelDuration;
     let rockRate;
-    if (level === 5) {
+    if (level === 6) {
+      // Level 2-3: rocks from random directions, moderate rate
+      if (progress < 0.33) rockRate = 160;
+      else if (progress < 0.5) rockRate = 120;
+      else rockRate = 180;
+    } else if (level === 5) {
       // Level 2-2: moderate early, taper off in 2nd half
       if (progress < 0.33) rockRate = 200;
       else if (progress < 0.5) rockRate = 150;
@@ -2595,8 +3948,40 @@ function update() {
       else if (progress < 0.75) rockRate = 220;
       else rockRate = 300;
     }
-    if (levelTimer % rockRate === 0) spawnRock();
-
+    if (levelTimer % rockRate === 0) {
+      if (level === 6) {
+        // 2-3: rocks from BOTH directions randomly
+        const fromLeft = Math.random() < 0.4;
+        const sizeRoll = Math.random();
+        let size, radius, speed;
+        if (sizeRoll < 0.55) {
+          size = 'medium'; radius = 22; speed = 1.8 + Math.random() * 0.8;
+        } else {
+          size = 'large'; radius = 35; speed = 1.2 + Math.random() * 0.6;
+        }
+        const knockback = { medium: 50, large: 80 };
+        const spawnX = fromLeft ? scrollOffset - 50 : scrollOffset + W + 50;
+        rocks.push({
+          worldX: spawnX,
+          originX: spawnX,
+          radius: radius,
+          speed: fromLeft ? -speed : speed, // negative = rolls right (from left)
+          size: size,
+          knockback: knockback[size],
+          rotation: 0,
+          rotationSpeed: fromLeft ? (0.018 + Math.random() * 0.012) : -(0.018 + Math.random() * 0.012),
+          vy: -(3.5 + Math.random() * 3),
+          bounceY: 0,
+          bounceDamping: 0.55 + Math.random() * 0.2,
+          fromLeft: fromLeft
+        });
+      } else {
+        spawnRock();
+      }
+    }
+  }
+  // Update existing rolling rocks (let them finish rolling during transition)
+  if (isVolcanoLevel() && !verticalMode) {
     for (let i = rocks.length - 1; i >= 0; i--) {
       const r = rocks[i];
       r.worldX -= r.speed;
@@ -2613,8 +3998,8 @@ function update() {
           r.vy = 0;
         }
       }
-      // Remove if off screen left
-      if (r.worldX < scrollOffset - 100) {
+      // Remove if off screen (either side)
+      if (r.worldX < scrollOffset - 100 || r.worldX > scrollOffset + W + 100) {
         rocks.splice(i, 1);
         continue;
       }
@@ -2628,10 +4013,14 @@ function update() {
         const dy = py - cy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < r.radius + player.w / 3) {
-          player.x -= r.knockback;
+          // Knockback direction depends on which side the rock comes from
+          const knockDir = r.fromLeft ? 1 : -1; // push away from rock's origin
+          player.x += knockDir * r.knockback;
           if (player.x < 0) player.x = 0;
+          if (player.x > W - player.w) player.x = W - player.w;
           r.hitCooldown = 15; // prevent same rock multi-hitting
           shakeTimer = 8;
+          player.knockbackTimer = 20;
           spawnParticles(sx, cy, '#8b7355', 8, 4);
           playRockHit();
         }
@@ -2641,8 +4030,9 @@ function update() {
     }
   }
 
-  // Molten rocks (volcano levels)
-  if (isVolcanoLevel()) {
+  // Molten rocks (volcano horizontal only)
+  // Spawn new molten rocks only before cliff transition
+  if (isVolcanoLevel() && !verticalMode && !(level === 6 && cliffTransition > 0)) {
     const progress = levelTimer / levelDuration;
     let moltenSpawn = false;
     if (level === 5) {
@@ -2663,12 +4053,9 @@ function update() {
       }
     }
     if (moltenSpawn) spawnMoltenRock();
-
-    // Periodic sizzle SFX for molten rocks
-    if (moltenRocks.length > 0 && frameCount % 30 === 0) {
-      playMoltenSizzle();
-    }
-
+  }
+  // Update existing molten rocks (let them finish rolling during transition)
+  if (isVolcanoLevel() && !verticalMode) {
     // Periodic sizzle SFX for molten rocks
     if (moltenRocks.length > 0 && frameCount % 30 === 0) {
       playMoltenSizzle();
@@ -3323,6 +4710,267 @@ function updateDojoBirds() {
         b.y + b.h > player.y) {
       dojoStun();
       dojoBirds.splice(i, 1);
+    }
+  }
+}
+
+function updateClimbBirds() {
+  if (!verticalMode) { climbBirds = []; return; }
+
+  // Spawn rate: ~every 90-140 frames, gets slightly denser higher up
+  const climbProg = Math.min(1, Math.abs(scrollOffsetY) / CLIMB_TOTAL_HEIGHT);
+  // No new birds in the final 1/3 of the climb — but let existing ones finish
+  const spawnRate = Math.max(60, Math.floor(120 - climbProg * 50));
+  if (climbProg <= 0.67 && frameCount % spawnRate === 0) {
+    const birdScreenY = 40 + Math.random() * (H * 0.7);
+    const fromLeft = Math.random() < 0.5;
+    // Eagles: ~40% base chance, up to ~70% higher up
+    const eagle = Math.random() < 0.4 + climbProg * 0.3;
+    const speed = eagle
+      ? 1.8 + Math.random() * 1.5 + climbProg * 1.0  // eagles are slower but menacing
+      : 2.5 + Math.random() * 2.5 + climbProg * 1.5;
+    climbBirds.push({
+      x: fromLeft ? (eagle ? -60 : -30) : (eagle ? W + 60 : W + 30),
+      y: birdScreenY,
+      baseY: birdScreenY,
+      vx: fromLeft ? speed : -speed,
+      dir: fromLeft ? 1 : -1,
+      frame: 0,
+      timer: 0,
+      w: eagle ? 48 : 24,
+      h: eagle ? 28 : 16,
+      isEagle: eagle,
+      bobPhase: Math.random() * Math.PI * 2
+    });
+    if (eagle) playEagleScreech();
+  }
+
+  for (let i = climbBirds.length - 1; i >= 0; i--) {
+    const b = climbBirds[i];
+    b.x += b.vx;
+    b.timer++;
+    if (b.timer % 8 === 0) b.frame = (b.frame + 1) % 4;
+    // Up/down soaring motion — eagles have bigger, slower swoops
+    if (b.baseY === undefined) { b.baseY = b.y; b.bobPhase = 0; }
+    if (b.isEagle) {
+      // Eagle attack behavior: dive toward player when in range
+      if (b.attackState === undefined) b.attackState = 'approach'; // approach → dive → pullup → glide
+      if (b.attackState === 'pullup') b.pullupTimer = (b.pullupTimer || 0);
+
+      const distToPlayer = Math.abs(b.x + b.w / 2 - (player.x + player.w / 2));
+      const playerCenterY = player.y + player.h / 2;
+
+      if (b.attackState === 'approach') {
+        // Soar at baseY until horizontally close to player
+        b.y = b.baseY + Math.sin(b.timer * 0.035 + b.bobPhase) * 12;
+        if (distToPlayer < W * 0.45) {
+          b.attackState = 'dive';
+          b.diveStartY = b.y;
+          b.diveTargetY = playerCenterY - 5; // aim slightly above player center
+          b.diveProgress = 0;
+        }
+      } else if (b.attackState === 'dive') {
+        // Swoop down toward the player's Y position
+        b.diveProgress += 0.04;
+        const t = Math.min(1, b.diveProgress);
+        const ease = t * t * (3 - 2 * t); // smooth ease in-out
+        b.y = b.diveStartY + (b.diveTargetY - b.diveStartY) * ease;
+        // Speed up during dive
+        b.x += b.vx * 0.3;
+        if (t >= 1) {
+          b.attackState = 'pullup';
+          b.pullupTimer = 0;
+          b.pullupStartY = b.y;
+        }
+      } else if (b.attackState === 'pullup') {
+        // Pull back up after dive
+        b.pullupTimer++;
+        const pullT = Math.min(1, b.pullupTimer / 40);
+        const pullEase = pullT * pullT;
+        b.y = b.pullupStartY + (b.baseY - b.pullupStartY) * pullEase;
+        if (pullT >= 1) {
+          b.attackState = 'glide'; // done attacking, just glide out
+        }
+      } else {
+        // glide: gentle bob while exiting
+        b.y = b.baseY + Math.sin(b.timer * 0.035 + b.bobPhase) * 8;
+      }
+    } else {
+      b.y = b.baseY + Math.sin(b.timer * 0.07 + b.bobPhase) * 3;
+    }
+    // Remove when offscreen on the other side
+    if ((b.dir > 0 && b.x > W + 40) || (b.dir < 0 && b.x < -40)) {
+      climbBirds.splice(i, 1);
+      continue;
+    }
+    // Collision — knockback, no kill. Eagles hit much harder.
+    if (player.invincible <= 0 &&
+        b.x < player.x + player.w &&
+        b.x + b.w > player.x &&
+        b.y < player.y + player.h &&
+        b.y + b.h > player.y) {
+      const knockForce = b.isEagle ? 80 : 6;  // eagles send you FLYING sideways
+      const knockUp = b.isEagle ? -6 : -7;   // eagles: huge horizontal + upward pop
+      const invFrames = b.isEagle ? 60 : 40;
+      player.x += b.dir * knockForce;
+      player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+      player.vy = knockUp;
+      player.grounded = false;
+      player.invincible = invFrames;
+      player.knockbackTimer = 20;
+      playRockHit();
+      const pColor = b.isEagle ? '#ffddaa' : '#aabbcc';
+      const pCount = b.isEagle ? 12 : 6;
+      spawnParticles(player.x + player.w / 2, player.y + player.h / 2, pColor, pCount, b.isEagle ? 5 : 3);
+      b.vx *= 1.8;
+    }
+  }
+}
+
+function drawClimbBirds() {
+  const P = 4;
+  for (const b of climbBirds) {
+    const bx = Math.floor(b.x);
+    const by = Math.floor(b.y);
+    const wingUp = b.frame < 2;
+    const facingLeft = b.dir < 0;
+
+    if (b.isEagle) {
+      // ── EAGLE — large, brown/gold, hooked beak, wide wingspan ──
+      const E = P; // same pixel size
+      if (facingLeft) {
+        // Body — wide, dark brown
+        ctx.fillStyle = '#4a3020';
+        ctx.fillRect(bx, by + E * 2, E * 8, E * 3);
+        // Chest — lighter brown
+        ctx.fillStyle = '#6a4830';
+        ctx.fillRect(bx + E, by + E * 2, E * 3, E * 2);
+        // Head — white (bald eagle)
+        ctx.fillStyle = '#e8ddd0';
+        ctx.fillRect(bx - E, by + E, E * 3, E * 3);
+        ctx.fillRect(bx - E * 2, by + E * 2, E, E * 2);
+        // Eye — fierce yellow with black pupil
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillRect(bx, by + E * 2, E, E);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(bx, by + E * 2, Math.ceil(E * 0.6), Math.ceil(E * 0.6));
+        // Hooked beak — yellow, curves down
+        ctx.fillStyle = '#eea820';
+        ctx.fillRect(bx - E * 3, by + E * 3, E * 2, E);
+        ctx.fillRect(bx - E * 2, by + E * 4, E, E);
+        // Wings — dark brown, WIDE
+        ctx.fillStyle = '#3a2418';
+        if (wingUp) {
+          ctx.fillRect(bx + E * 2, by - E * 2, E * 5, E);
+          ctx.fillRect(bx + E * 3, by - E * 3, E * 4, E);
+          ctx.fillRect(bx + E * 4, by - E * 4, E * 3, E);
+          // Wing tips — lighter
+          ctx.fillStyle = '#5a3c28';
+          ctx.fillRect(bx + E * 6, by - E * 4, E * 2, E);
+        } else {
+          ctx.fillRect(bx + E * 2, by + E * 5, E * 5, E);
+          ctx.fillRect(bx + E * 3, by + E * 6, E * 4, E);
+          ctx.fillRect(bx + E * 4, by + E * 7, E * 3, E);
+          ctx.fillStyle = '#5a3c28';
+          ctx.fillRect(bx + E * 6, by + E * 7, E * 2, E);
+        }
+        // Tail feathers — dark, fanned
+        ctx.fillStyle = '#2a1810';
+        ctx.fillRect(bx + E * 8, by + E, E * 3, E);
+        ctx.fillRect(bx + E * 8, by + E * 2, E * 2, E);
+        ctx.fillRect(bx + E * 9, by + E * 3, E * 2, E);
+        // Talons
+        ctx.fillStyle = '#eea820';
+        ctx.fillRect(bx + E, by + E * 5, E, E);
+        ctx.fillRect(bx + E * 3, by + E * 5, E, E);
+      } else {
+        // Body — mirrored
+        ctx.fillStyle = '#4a3020';
+        ctx.fillRect(bx + E * 4, by + E * 2, E * 8, E * 3);
+        // Chest
+        ctx.fillStyle = '#6a4830';
+        ctx.fillRect(bx + E * 8, by + E * 2, E * 3, E * 2);
+        // Head — white
+        ctx.fillStyle = '#e8ddd0';
+        ctx.fillRect(bx + E * 10, by + E, E * 3, E * 3);
+        ctx.fillRect(bx + E * 13, by + E * 2, E, E * 2);
+        // Eye
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillRect(bx + E * 11, by + E * 2, E, E);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(bx + E * 11 + Math.floor(E * 0.4), by + E * 2, Math.ceil(E * 0.6), Math.ceil(E * 0.6));
+        // Hooked beak
+        ctx.fillStyle = '#eea820';
+        ctx.fillRect(bx + E * 13, by + E * 3, E * 2, E);
+        ctx.fillRect(bx + E * 13, by + E * 4, E, E);
+        // Wings
+        ctx.fillStyle = '#3a2418';
+        if (wingUp) {
+          ctx.fillRect(bx + E * 5, by - E * 2, E * 5, E);
+          ctx.fillRect(bx + E * 5, by - E * 3, E * 4, E);
+          ctx.fillRect(bx + E * 5, by - E * 4, E * 3, E);
+          ctx.fillStyle = '#5a3c28';
+          ctx.fillRect(bx + E * 4, by - E * 4, E * 2, E);
+        } else {
+          ctx.fillRect(bx + E * 5, by + E * 5, E * 5, E);
+          ctx.fillRect(bx + E * 5, by + E * 6, E * 4, E);
+          ctx.fillRect(bx + E * 5, by + E * 7, E * 3, E);
+          ctx.fillStyle = '#5a3c28';
+          ctx.fillRect(bx + E * 4, by + E * 7, E * 2, E);
+        }
+        // Tail feathers
+        ctx.fillStyle = '#2a1810';
+        ctx.fillRect(bx + E, by + E, E * 3, E);
+        ctx.fillRect(bx + E * 2, by + E * 2, E * 2, E);
+        ctx.fillRect(bx + E, by + E * 3, E * 2, E);
+        // Talons
+        ctx.fillStyle = '#eea820';
+        ctx.fillRect(bx + E * 8, by + E * 5, E, E);
+        ctx.fillRect(bx + E * 10, by + E * 5, E, E);
+      }
+    } else {
+      // ── Small bird — same as before ──
+      if (facingLeft) {
+        ctx.fillStyle = '#556070';
+        ctx.fillRect(bx, by + P, P * 5, P * 2);
+        ctx.fillStyle = '#667080';
+        ctx.fillRect(bx, by + P, P * 2, P * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(bx + P, by + P, P, P);
+        ctx.fillStyle = '#ffaa44';
+        ctx.fillRect(bx - P, by + P * 2, P, P);
+        ctx.fillStyle = '#778899';
+        if (wingUp) {
+          ctx.fillRect(bx + P, by - P, P * 3, P);
+          ctx.fillRect(bx + P * 2, by - P * 2, P * 2, P);
+        } else {
+          ctx.fillRect(bx + P, by + P * 3, P * 3, P);
+          ctx.fillRect(bx + P * 2, by + P * 4, P * 2, P);
+        }
+        ctx.fillStyle = '#667080';
+        ctx.fillRect(bx + P * 5, by, P * 2, P);
+        ctx.fillRect(bx + P * 5, by + P, P, P);
+      } else {
+        ctx.fillStyle = '#556070';
+        ctx.fillRect(bx + P * 2, by + P, P * 5, P * 2);
+        ctx.fillStyle = '#667080';
+        ctx.fillRect(bx + P * 5, by + P, P * 2, P * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(bx + P * 5, by + P, P, P);
+        ctx.fillStyle = '#ffaa44';
+        ctx.fillRect(bx + P * 7, by + P * 2, P, P);
+        ctx.fillStyle = '#778899';
+        if (wingUp) {
+          ctx.fillRect(bx + P * 3, by - P, P * 3, P);
+          ctx.fillRect(bx + P * 3, by - P * 2, P * 2, P);
+        } else {
+          ctx.fillRect(bx + P * 3, by + P * 3, P * 3, P);
+          ctx.fillRect(bx + P * 3, by + P * 4, P * 2, P);
+        }
+        ctx.fillStyle = '#667080';
+        ctx.fillRect(bx, by, P * 2, P);
+        ctx.fillRect(bx + P, by + P, P, P);
+      }
     }
   }
 }
@@ -4417,6 +6065,11 @@ function drawVolcanicGround() {
     smoke:    '#1a1614',  // smoke pixel
   };
 
+  // ── 0. Solid base fill — prevent any bg bleed below the ground line ──
+  // Find the highest ground Y across the screen and fill everything below it
+  ctx.fillStyle = PAL.deep;
+  ctx.fillRect(0, Math.floor(GROUND_Y / P) * P, W, H - Math.floor(GROUND_Y / P) * P);
+
   // ── 1. Base fill — banded flat colours (no gradients) ──
   // Fill column by column in P-wide strips, banded by depth
   for (let sx = 0; sx < W; sx += P) {
@@ -4573,20 +6226,22 @@ function drawLavaPools() {
     const totalCols = pw / P;
 
     if (isVolcanoLevel()) {
-      // ── CRACK STYLE for volcano levels ──
-      // Jagged narrow fissure with lava glow inside
+      // ── CRACK STYLE for volcano levels — follows ground slope ──
       const seed = Math.round(p.worldX * 7.3) & 0xFFFF;
       ctx.globalAlpha = alpha;
 
-      // Dark crack outline (jagged shape)
+      // Dark crack outline (jagged shape) — each column follows the ground angle
       for (let col = 0; col < totalCols; col++) {
         const colX = lx + col * P;
+        // Get ground Y at this column's world X position (follows slope)
+        const colWorldX = p.worldX - p.w / 2 + col * P;
+        const colGroundY = getGroundY(colWorldX);
         // Jagged depth: use seeded hash to vary crack width per column
         const jag = ((col * 31 + seed) * 2654435761 >>> 16) & 7;
         const crackDepth = Math.max(1, Math.min(3, 1 + (jag % 3)));
         // Offset from ground — crack wiggles up/down
         const wiggle = ((col * 17 + seed * 3) * 2654435761 >>> 20) % 3 - 1;
-        const crackY = poolGY + wiggle * P;
+        const crackY = colGroundY + wiggle * P;
 
         // Dark edges of the crack
         ctx.fillStyle = '#1a0500';
@@ -4608,7 +6263,7 @@ function drawLavaPools() {
         }
       }
 
-      // Ambient glow above the crack
+      // Ambient glow above the crack (at center ground Y)
       ctx.globalAlpha = alpha * 0.12;
       const glowPulse = Math.sin(frameCount * 0.03 + p.waveOffset) * 0.3 + 0.7;
       ctx.fillStyle = `rgba(255, 60, 0, ${glowPulse})`;
@@ -5589,20 +7244,26 @@ function drawPlayer() {
   // Invincibility flash — blink every 4 frames
   if (player.invincible > 0 && Math.floor(frameCount / 4) % 2 === 0) return;
 
+  // Summit jump fade — player dissolves as they dive into the crater
+  const summitFade = summitJumping ? summitPlayerAlpha : 1;
+  if (summitFade <= 0.01) return;
+
   const cx = player.x + player.w / 2;
   const cy = player.y + player.h / 2;
 
-  // Trail - subtle dust puffs (only when moving on ground)
-  player.trail.forEach(t => {
-    const alpha = (t.life / 12) * 0.08;
-    if (alpha < 0.01) return;
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = 'rgba(180, 180, 200, 0.5)';
-    ctx.beginPath();
-    ctx.arc(t.x, t.y, 2 + (1 - t.life / 12) * 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.globalAlpha = 1;
+  // Trail - subtle dust puffs (only when moving on ground) — skip during summit dive
+  if (!summitJumping) {
+    player.trail.forEach(t => {
+      const alpha = (t.life / 12) * 0.08;
+      if (alpha < 0.01) return;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(180, 180, 200, 0.5)';
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 2 + (1 - t.life / 12) * 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+  ctx.globalAlpha = summitFade;
 
   if (spriteReady) {
     ctx.save();
@@ -5626,6 +7287,13 @@ function drawPlayer() {
       // Stretch horizontally, squash vertically during kick peak
       scaleXAnim = 1 + kickCurve * 0.15;
       scaleYAnim = 1 - kickCurve * 0.1;
+    } else if (player.knockbackTimer > 0) {
+      // ── KNOCKBACK POSE — recoil back, arms out ──
+      const kt = player.knockbackTimer / 20; // 1→0 as it fades
+      rotation = scaleX * -0.4 * kt;  // lean away from hit direction
+      scaleXAnim = 1 + kt * 0.15;     // stretch wide (arms out)
+      scaleYAnim = 1 - kt * 0.1;      // squash slightly
+      bobY = -kt * 6;                 // pop upward
     } else if (!player.grounded && player.doubleJumped) {
       // ── DOUBLE JUMP SPIN (eased, with tuck + afterimages) ──
       rotation = player.spinAngle;
@@ -5639,7 +7307,7 @@ function drawPlayer() {
       if (spinProgress < 0.85 && spinProgress > 0.05) {
         for (let g = 1; g <= 3; g++) {
           const ghostAngle = rotation - g * 0.45;
-          const ghostAlpha = (0.2 - g * 0.05) * (1 - spinProgress);
+          const ghostAlpha = (0.2 - g * 0.05) * (1 - spinProgress) * summitFade;
           if (ghostAlpha > 0.01) {
             ctx.save();
             ctx.globalAlpha = ghostAlpha;
@@ -5650,7 +7318,7 @@ function drawPlayer() {
             ctx.restore();
           }
         }
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = summitFade;
       }
     } else if (!player.grounded) {
       // ── SINGLE JUMP — lean back/forward ──
@@ -5725,14 +7393,16 @@ function drawPlayer() {
       ctx.restore();
     }
 
-    // Shadow on ground
-    ctx.globalAlpha = 0.3;
-    ctx.fillStyle = '#000';
-    const shadowGroundY = isVolcanoLevel() ? getGroundY(player.x + scrollOffset) : GROUND_Y;
-    const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (shadowGroundY - (player.y + player.h)) / 200);
-    ctx.beginPath();
-    ctx.ellipse(cx, shadowGroundY + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
-    ctx.fill();
+    // Shadow on ground — skip during summit dive (no ground beneath)
+    if (!summitJumping && !verticalMode) {
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#000';
+      const shadowGroundY = isVolcanoLevel() ? getGroundY(player.x + scrollOffset) : GROUND_Y;
+      const shadowScale = player.grounded ? 1 : Math.max(0.4, 1 - (shadowGroundY - (player.y + player.h)) / 200);
+      ctx.beginPath();
+      ctx.ellipse(cx, shadowGroundY + 2, SPRITE_W * 0.35 * shadowScale, 4 * shadowScale, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.globalAlpha = 1;
   } else {
     // Fallback: simple rectangle if sprite not loaded
@@ -5761,7 +7431,7 @@ function drawHUD() {
   ctx.font = `bold 7px ${GAME_FONT}`;
   ctx.textAlign = 'left';
   const hudLevel = !isVolcanoLevel() ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
-  const hudLocation = !isVolcanoLevel() ? 'NEO TOKYO' : 'THE VOLCANO';
+  const hudLocation = !isVolcanoLevel() ? 'NEO TOKYO' : level === 6 ? 'THE SUMMIT' : 'THE VOLCANO';
   ctx.fillText(`${hudLevel} — ${hudLocation}`, 20, 38);
 
   // Score
@@ -5782,13 +7452,27 @@ function drawHUD() {
   const iconGap = 4;
   const livesStartX = 20;
   const livesY = 48;
-  for (let i = 0; i < lives; i++) {
-    const ix = livesStartX + i * (iconSize + iconGap);
+  if (lives > MAX_LIVES) {
+    // Show single icon + count for cheat lives
     if (spriteReady) {
-      ctx.drawImage(ninjaSprite, ix, livesY, iconSize, iconSize);
+      ctx.drawImage(ninjaSprite, livesStartX, livesY, iconSize, iconSize);
     } else {
       ctx.fillStyle = '#3399dd';
-      ctx.fillRect(ix, livesY, iconSize, iconSize);
+      ctx.fillRect(livesStartX, livesY, iconSize, iconSize);
+    }
+    ctx.font = `bold 16px ${GAME_FONT}`;
+    ctx.fillStyle = '#ffcc00';
+    ctx.textAlign = 'left';
+    ctx.fillText('x' + lives, livesStartX + iconSize + 4, livesY + 16);
+  } else {
+    for (let i = 0; i < lives; i++) {
+      const ix = livesStartX + i * (iconSize + iconGap);
+      if (spriteReady) {
+        ctx.drawImage(ninjaSprite, ix, livesY, iconSize, iconSize);
+      } else {
+        ctx.fillStyle = '#3399dd';
+        ctx.fillRect(ix, livesY, iconSize, iconSize);
+      }
     }
   }
 
@@ -5798,6 +7482,30 @@ function drawHUD() {
     ctx.font = `12px ${GAME_FONT}`;
     ctx.fillStyle = 'rgba(100,200,255,0.6)';
     ctx.fillText('DOUBLE JUMP READY', W / 2, 55);
+  }
+
+  // Gas exposure meter (level 2-3 vertical mode)
+  if (verticalMode && gasExposure > 0) {
+    const gasRatio = gasExposure / GAS_KILL_THRESHOLD;
+    const meterW = 80;
+    const meterH = 8;
+    const mx = W / 2 - meterW / 2;
+    const my = 65;
+    // Background
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(mx - 1, my - 1, meterW + 2, meterH + 2);
+    // Fill — green to yellow to red
+    const r = Math.min(255, Math.floor(gasRatio * 2 * 255));
+    const g = Math.min(255, Math.floor((1 - gasRatio) * 2 * 255));
+    ctx.fillStyle = `rgb(${r}, ${g}, 0)`;
+    ctx.fillRect(mx, my, meterW * gasRatio, meterH);
+    // Label
+    if (gasRatio > 0.5) {
+      ctx.fillStyle = '#ff4444';
+      ctx.font = `bold 7px ${GAME_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillText('TOXIC!', W / 2, my - 3);
+    }
   }
 }
 
@@ -6359,14 +8067,31 @@ function drawRespawnScreen() {
     ctx.font = `12px ${GAME_FONT}`;
     ctx.fillText('LIVES REMAINING', W / 2, H / 2 - 10);
 
-    for (let i = 0; i < lives; i++) {
-      const ix = startX + i * (iconSize + iconGap);
+    if (lives > MAX_LIVES) {
       const iy = H / 2 + 5;
+      const singleW = iconSize + 40;
+      const sx = W / 2 - singleW / 2;
       if (spriteReady) {
-        ctx.drawImage(ninjaSprite, ix, iy, iconSize, iconSize);
+        ctx.drawImage(ninjaSprite, sx, iy, iconSize, iconSize);
       } else {
         ctx.fillStyle = '#3399dd';
-        ctx.fillRect(ix, iy, iconSize, iconSize);
+        ctx.fillRect(sx, iy, iconSize, iconSize);
+      }
+      ctx.font = `bold 22px ${GAME_FONT}`;
+      ctx.fillStyle = '#ffcc00';
+      ctx.textAlign = 'left';
+      ctx.fillText('x' + lives, sx + iconSize + 6, iy + 22);
+      ctx.textAlign = 'center';
+    } else {
+      for (let i = 0; i < lives; i++) {
+        const ix = startX + i * (iconSize + iconGap);
+        const iy = H / 2 + 5;
+        if (spriteReady) {
+          ctx.drawImage(ninjaSprite, ix, iy, iconSize, iconSize);
+        } else {
+          ctx.fillStyle = '#3399dd';
+          ctx.fillRect(ix, iy, iconSize, iconSize);
+        }
       }
     }
 
@@ -6748,7 +8473,7 @@ function drawTransition() {
   // Location name
   ctx.fillStyle = '#ffcc88';
   ctx.font = `12px ${GAME_FONT}`;
-  const locationName = !isVolcanoLevel() ? 'NEO TOKYO' : 'THE VOLCANO';
+  const locationName = !isVolcanoLevel() ? 'NEO TOKYO' : level === 6 ? 'THE SUMMIT' : 'THE VOLCANO';
   ctx.fillText(locationName, W / 2, H / 2 + 20);
 
   ctx.globalAlpha = 1;
@@ -6981,14 +8706,28 @@ function draw() {
   } else {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (isVolcanoLevel()) {
-      drawDestroyedCitySky();
-      if (!level2BgReady) {
+      if (level === 6 && volcanoBg23Ready) {
+        // Level 2-3: use the volcano-bg-2-3 image for the whole level
+        const imgAspect = volcanoBg23.width / volcanoBg23.height;
+        const drawW = W;
+        const drawH = W / imgAspect;
+        // Slow parallax shift based on horizontal scroll
+        const maxShift = Math.max(1, (drawW - W) / 2);
+        const rawShift = (scrollOffset * 0.008) % (maxShift * 2);
+        const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
+        ctx.drawImage(volcanoBg23, shiftX, (H - drawH) / 2, drawW, drawH);
+      } else {
+        drawDestroyedCitySky();
+      }
+      if (level !== 6 && !level2BgReady) {
         drawRuinsLayer(ruins_far, 0.1, 0, false);
         drawRuinsLayer(ruins_mid, 0.35, 0.3, false);
       }
-      drawMidgroundForest();
-      drawBurningVillage();
-      drawRuinsLayer(ruins_near, 0.8, 0.1, true);
+      if (level !== 6) {
+        drawMidgroundForest();
+        drawBurningVillage();
+        drawRuinsLayer(ruins_near, 0.8, 0.1, true);
+      }
     } else {
       drawNeoTokyoSky();
       drawBuildingLayer(buildings_far, 0.1, 0);
@@ -6997,7 +8736,471 @@ function draw() {
       drawBuildingLayer(buildings_near, 0.5, 0.1);
     }
     let playerDrawnInDepth = false;
-    if (isVolcanoLevel()) {
+
+    // ── VERTICAL CLIMB MODE (Level 2-3) ──
+    if (verticalMode) {
+      // ── CLIFF FACE — world-space mountain that scrolls with the camera ──
+      const P = 4;
+      const WPAL = {
+        deep: '#0c0604', dark: '#160d08', mid: '#24160e',
+        surface: '#362010', light: '#4a2e1a', edge: '#5c3820',
+        shadow: '#080402', lavaD: '#882200', lava: '#cc4400', lavaH: '#ffaa22'
+      };
+
+      // Base fill — ensure no bg bleeds through anywhere
+      ctx.fillStyle = '#020001';
+      ctx.fillRect(0, 0, W, H);
+
+      // ── 1. SKY + CITY BACKGROUND — using volcano-bg-2-3 image ──
+      // Background is clipped to only show below the volcano lip
+      const climbProgress = Math.min(1, Math.abs(scrollOffsetY) / CLIMB_TOTAL_HEIGHT);
+      const lipScreenYForBg = climbScreenY(-CLIMB_TOTAL_HEIGHT);
+      // The bg image should only be visible below the lip
+      const bgClipTop = Math.max(0, Math.floor(lipScreenYForBg));
+
+      // ── BACKGROUND: city skyline below the lip ──
+      if (volcanoBg23Ready) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, bgClipTop, W, H - bgClipTop);
+        ctx.clip();
+        const imgAspect = volcanoBg23.width / volcanoBg23.height;
+        const drawW = W;
+        const drawH = W / imgAspect;
+        const bgShift = climbProgress * H * 0.5;
+        ctx.drawImage(volcanoBg23, 0, bgShift, drawW, drawH);
+        ctx.restore();
+      } else {
+        const skyGrad = ctx.createLinearGradient(0, bgClipTop, 0, H);
+        skyGrad.addColorStop(0, '#1a0e20');
+        skyGrad.addColorStop(0.4, '#3a1520');
+        skyGrad.addColorStop(0.75, '#6a2810');
+        skyGrad.addColorStop(1, '#cc5520');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, bgClipTop, W, H - bgClipTop);
+      }
+
+      // Above the lip is already covered by the base fill (#020001)
+      // No additional fill needed — mountain texture and smoke clouds provide the visuals
+
+      // Smoke cloud region — centered on the mountain top, extends above and below
+      const smokeTopY = Math.max(-200, climbScreenY(-CLIMB_TOTAL_HEIGHT) - 250);
+      const smokeBotY = Math.min(H, climbScreenY(-CLIMB_TOTAL_HEIGHT) + 350);
+
+      // ── BACKGROUND SMOKE LAYER — behind the mountain, hovers in place ──
+      drawSummitSmokeLayer(smokeTopY, smokeBotY, P, 0);
+
+      // ── ERUPTION FLARES (BEHIND MOUNTAIN) — thick lava shooting up from inside the crater ──
+      // Only flares and drops render here so the mountain graphic occludes their lower trails
+      if (eruptionParticles.length > 0) {
+        for (const p of eruptionParticles) {
+          if (p.type !== 'flare' && p.type !== 'drop') continue;
+          if (p.x < -40 || p.x > W + 40 || p.y > H + 20) continue;
+          const lifeFrac = p.life / p.maxLife;
+          const alpha = Math.min(1, lifeFrac * 2);
+          ctx.globalAlpha = alpha;
+
+          let r, g, b;
+          if (p.heat > 0.7 && lifeFrac > 0.6) {
+            r = 255; g = 220 + Math.floor(Math.random() * 35); b = 100 + Math.floor(Math.random() * 80);
+          } else if (lifeFrac > 0.4) {
+            r = 255; g = 120 + Math.floor(lifeFrac * 100); b = 20 + Math.floor(Math.random() * 30);
+          } else {
+            r = 180 + Math.floor(lifeFrac * 75); g = 40 + Math.floor(lifeFrac * 60); b = 10;
+          }
+
+          const drawY = Math.max(-20, p.y);
+          const px = Math.floor(p.x / P) * P;
+          const py = Math.floor(drawY / P) * P;
+
+          if (p.type === 'flare') {
+            const sz = Math.max(P * 3, Math.floor(p.size / P) * P);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(px - sz / 2, py, sz, sz);
+            ctx.fillRect(px - sz / 2 + P, py - P, sz - P * 2, P);
+            ctx.fillRect(px - sz / 2 + P, py + sz, sz - P * 2, P);
+
+            const coreAlpha = Math.min(1, lifeFrac * 1.2) * 0.85;
+            ctx.fillStyle = `rgba(255,250,200,${coreAlpha.toFixed(2)})`;
+            ctx.fillRect(px - sz / 2 + P * 2, py + P, sz - P * 4 || P, sz - P * 2 || P);
+
+            // Long trailing streak below — will be occluded by the mountain
+            const trailLen = Math.floor(10 + lifeFrac * 14);
+            for (let t = 1; t <= trailLen; t++) {
+              const ty = py + t * P * 2;
+              if (ty > H + 10) break;
+              const ta = alpha * (1 - t / (trailLen + 2)) * 0.8;
+              ctx.globalAlpha = ta;
+              const trailR = Math.min(255, r + 10);
+              const trailG = Math.max(0, g - 20);
+              ctx.fillStyle = `rgb(${trailR},${trailG},${b})`;
+              const trailW = Math.max(P, sz - Math.floor(t / 2) * P);
+              ctx.fillRect(px - trailW / 2, ty, trailW, P * 2);
+            }
+            ctx.globalAlpha = alpha;
+          } else if (p.type === 'drop') {
+            const sz = Math.max(P * 4, Math.floor(p.size / P) * P);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(px - sz / 2, py, sz, sz);
+            ctx.fillRect(px - sz / 2 + P, py - P, sz - P * 2, P);
+            ctx.fillRect(px - sz / 2 + P, py + sz, sz - P * 2, P);
+            ctx.fillRect(px - sz / 2 - P, py + P, P, sz - P * 2);
+            ctx.fillRect(px - sz / 2 + sz, py + P, P, sz - P * 2);
+
+            const coreAlpha = Math.min(1, lifeFrac * 1.3) * 0.9;
+            ctx.fillStyle = `rgba(255,255,220,${coreAlpha.toFixed(2)})`;
+            ctx.fillRect(px - sz / 2 + P * 2, py + P * 2, sz - P * 4, sz - P * 4);
+
+            const trailLen = 8;
+            for (let t = 1; t <= trailLen; t++) {
+              const ty = py + sz + t * P * 3;
+              if (ty > H + 10) break;
+              const ta = alpha * (1 - t / (trailLen + 1)) * 0.7;
+              ctx.globalAlpha = ta;
+              ctx.fillStyle = `rgb(${Math.min(255, r + 20)},${Math.max(0, g - 30)},${b})`;
+              const dripW = Math.max(P, P * (3 - Math.floor(t / 2)));
+              ctx.fillRect(px - dripW / 2, ty, dripW, P * 2);
+            }
+            ctx.globalAlpha = alpha;
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // ── PLAYER (BEHIND MOUNTAIN) — only after the apex of the summit jump ──
+      // While the player is going UP, they're drawn normally in front of the mountain.
+      // The moment they reach the top of their jump, they get redrawn here (behind the mountain)
+      // so the cliff face occludes them as they fall into the crater.
+      if (summitJumping && summitJumpPastApex) {
+        drawPlayer();
+      }
+
+      // ── 2. MOUNTAIN — world-space object, scrolls with camera ──
+      // Mountain spans worldY = 0 (base) to worldY = -CLIMB_TOTAL_HEIGHT (summit)
+      // It tapers from full width at base to ~20% width at summit
+      const mountainTopScreenY = climbScreenY(-CLIMB_TOTAL_HEIGHT);
+      const mountainBaseScreenY = climbScreenY(0);
+
+      // Only draw rows that are on screen
+      const drawTop = Math.max(0, Math.floor(mountainTopScreenY / P) * P - P * 8);
+      const drawBot = Math.min(H, Math.ceil(mountainBaseScreenY / P) * P + P * 8);
+
+      for (let y = drawTop; y < drawBot; y += P) {
+        // Convert screen Y to world Y for this row
+        const rowWorldY = (y - (H - CLIMB_GROUND_Y) + scrollOffsetY);
+        // How far up the mountain is this row? 0 = base, 1 = summit. NOT CLAMPED —
+        // the > 1 and < 0 checks below skip rows that are actually sky or ground.
+        const heightFrac = -rowWorldY / CLIMB_TOTAL_HEIGHT;
+        const worldRow = Math.floor(rowWorldY / P);
+
+        // Above the mountain summit = sky (skip)
+        if (heightFrac > 1) continue;
+        // Below the mountain base = ground (handled separately)
+        if (heightFrac < 0) continue;
+
+        // Taper: mountain narrows toward the summit, but bulges out just below the lip
+        const taperStart = 0.8;
+        const taperFrac = heightFrac > taperStart ? (heightFrac - taperStart) / (1 - taperStart) : 0;
+        let taperAmount = taperFrac * taperFrac * 0.15; // very gentle taper — stays wide
+        // Lip thickness: make the very top (last 8% of mountain) bulge outward before tapering
+        // This creates a thicker "rim" effect at the bottom of the lip
+        // Bulge band spans heightFrac [0.92, 1.0] — symmetric sine peak at 0.96
+        if (heightFrac > 0.92 && heightFrac <= 1.0) {
+          const lipBulge = (heightFrac - 0.92) / 0.08; // 0→1 across the bulge band
+          const bulgeCurve = Math.sin(lipBulge * Math.PI); // peaks in middle, zero at both ends
+          taperAmount -= bulgeCurve * 0.06; // push edges outward by up to 6% of W
+        }
+        // Cliff-like edge noise — use absolute worldRow for consistent hashing at the top
+        // (negative worldRow produces skewed distribution with bitwise ops)
+        const absRow = Math.abs(worldRow);
+        const edgeNoiseA = ((absRow * 2654435761 >>> 16) % 5) * P;
+        const edgeNoiseB = ((absRow * 1597463007 >>> 12) % 3) * P;
+        const leftEdgeJag = edgeNoiseA + edgeNoiseB;
+        const rightEdgeJag = ((absRow * 3266489917 >>> 14) % 5) * P + ((absRow * 1099511628 >>> 18) % 3) * P;
+        const rockLeftEdge = taperAmount * W * 0.5 + leftEdgeJag;
+        const rockRightEdge = W - taperAmount * W * 0.5 - rightEdgeJag;
+
+        if (rockLeftEdge >= rockRightEdge) continue; // too narrow, skip
+
+        for (let x = 0; x < W; x += P) {
+          if (x < rockLeftEdge - P * 4 || x > rockRightEdge + P * 4) continue;
+
+          const h = ((x * 7919 + worldRow * 4813 + 31337) >>> 0) & 0xFFFF;
+
+          // Edge fringe — jagged rocky falloff like a real cliff
+          const distFromLeft = x - rockLeftEdge;
+          const distFromRight = rockRightEdge - x;
+          const edgeDist = Math.min(distFromLeft, distFromRight);
+          if (edgeDist < 0) {
+            // Irregular chunk beyond the main edge
+            if (h % 3 === 0 && edgeDist > -P * 4) {
+              ctx.fillStyle = h % 5 === 0 ? WPAL.dark : WPAL.deep;
+              ctx.fillRect(x, y, P, P);
+            } else if (h % 7 === 0 && edgeDist > -P * 2) {
+              ctx.fillStyle = WPAL.shadow;
+              ctx.fillRect(x, y, P, P);
+            }
+            continue;
+          }
+          if (edgeDist < P * 4) {
+            // Dark shadow band near the edges — more pronounced shading
+            if (edgeDist < P) {
+              ctx.fillStyle = WPAL.shadow;
+            } else if (edgeDist < P * 2) {
+              ctx.fillStyle = h % 2 === 0 ? WPAL.deep : WPAL.shadow;
+            } else {
+              ctx.fillStyle = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+            }
+            ctx.fillRect(x, y, P, P);
+            continue;
+          }
+
+          // Rock texture with diagonal stratified bands — matches bottom cliff face
+          // Ensure positive modulo since worldRow is negative at the summit
+          const rawPhase = (worldRow + x * 0.3) * 0.08;
+          const bandPhase = ((rawPhase % 1) + 1) % 1;
+          let color;
+          if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+          else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+          else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+          else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+          else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, P, P);
+        }
+
+        // Crevice cracks
+        if ((worldRow & 3) === 0) {
+          for (let cx = Math.ceil(rockLeftEdge / P) * P; cx < rockRightEdge; cx += P * 7) {
+            const ch = ((cx * 16807 + worldRow * 48271) >>> 0) & 0xFFFF;
+            if ((ch & 7) !== 0) continue;
+            ctx.fillStyle = WPAL.shadow;
+            ctx.fillRect(cx, y, P, P);
+          }
+        }
+
+        // Rocky bumps
+        if ((worldRow & 7) === 0) {
+          for (let bx = Math.ceil(rockLeftEdge / P) * P; bx < rockRightEdge; bx += P * 5) {
+            const bh = ((bx * 48271 + worldRow * 7919) >>> 0) & 0xFFFF;
+            if ((bh & 15) > 2) continue;
+            ctx.fillStyle = bh % 2 === 0 ? WPAL.edge : WPAL.light;
+            ctx.fillRect(bx, y, P * 2, P);
+            ctx.fillStyle = WPAL.shadow;
+            ctx.fillRect(bx, y + P, P * 2, P);
+          }
+        }
+
+        // Lava veins
+        if ((worldRow & 31) < 2) {
+          const lh = ((worldRow * 48271) >>> 0) & 0xFF;
+          const veinPulse = Math.sin(frameCount * 0.03 + worldRow * 0.1) * 0.3 + 0.5;
+          ctx.globalAlpha = veinPulse * 0.35;
+          ctx.fillStyle = lh % 2 === 0 ? WPAL.lavaD : WPAL.lava;
+          const span = rockRightEdge - rockLeftEdge;
+          if (span > 0) {
+            const vx1 = rockLeftEdge + (lh * 7) % span;
+            const vx2 = rockLeftEdge + ((lh * 13) + 100) % span;
+            ctx.fillRect(Math.floor(vx1 / P) * P, y, P * 3, P);
+            ctx.fillRect(Math.floor(vx2 / P) * P, y, P * 2, P);
+          }
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // ── 2b. VOLCANO LIP / CRATER RIM at summit ──
+      // Lip matches the mountain taper width at heightFrac = 1.0
+      const lipWorldY = -CLIMB_TOTAL_HEIGHT;
+      const lipScreenY = climbScreenY(lipWorldY);
+      const lipTaperFrac = 1.0; // summit
+      const lipTaperAmt = lipTaperFrac > 0.8 ? ((lipTaperFrac - 0.8) / 0.2) : 0;
+      const lipTaper = lipTaperAmt * lipTaperAmt * 0.15;
+      const lipLeft = lipTaper * W * 0.5;
+      const lipRight = W - lipTaper * W * 0.5;
+
+      // Lip edge variables kept for eruption positioning
+      // No side fills — base fill + mountain texture + smoke handle the sky
+
+      // ── 3. SOLID GROUND at bottom ──
+      const groundScreenY = climbScreenY(0);
+      if (groundScreenY < H + 20) {
+        const groundTop = Math.max(0, Math.floor(groundScreenY / P) * P);
+        // Fill everything below ground level solid first to prevent bg bleed
+        if (groundTop < H) {
+          ctx.fillStyle = WPAL.deep;
+          ctx.fillRect(0, groundTop, W, H - groundTop);
+        }
+        for (let sx = 0; sx < W; sx += P) {
+          if (groundTop >= H) continue;
+          const h = ((sx * 2654435761) >>> 0);
+          const peakBlocks = h % 5;
+          for (let b = 0; b < peakBlocks; b++) {
+            ctx.fillStyle = b === 0 ? WPAL.surface : (b < 2 ? WPAL.mid : WPAL.dark);
+            ctx.fillRect(sx, groundTop - (b + 1) * P, P, P);
+          }
+          ctx.fillStyle = WPAL.surface; ctx.fillRect(sx, groundTop, P, P * 2);
+          ctx.fillStyle = WPAL.mid;     ctx.fillRect(sx, groundTop + P * 2, P, P * 3);
+          ctx.fillStyle = WPAL.dark;    ctx.fillRect(sx, groundTop + P * 5, P, P * 3);
+        }
+      }
+
+      // Bottom edge seal — fill any sub-pixel gap at the very bottom
+      ctx.fillStyle = WPAL.deep;
+      ctx.fillRect(0, H - P * 2, W, P * 2);
+
+      // ── 4. EMBER PARTICLES ──
+      for (let i = 0; i < 10; i++) {
+        const eseed = ((Math.floor(frameCount / 4) * 3 + i * 1931) >>> 0) & 0xFFFF;
+        const life = ((Math.floor(frameCount / 3) + i * 17) % 20);
+        const ey = H - life * P * 2;
+        if (ey < 0 || ey > H) continue;
+        const ex = Math.floor(((eseed * 7 + i * 137) % W) / P) * P;
+        ctx.globalAlpha = Math.max(0, 1 - life / 20) * 0.4;
+        ctx.fillStyle = life < 5 ? WPAL.lavaH : '#ff8844';
+        ctx.fillRect(ex, ey, P, P);
+      }
+      ctx.globalAlpha = 1;
+
+      // ── MID SMOKE LAYER — in front of mountain, behind ledges/player, drifts left ──
+      drawSummitSmokeLayer(smokeTopY, smokeBotY, P, 1);
+
+      // ── ERUPTION SPARKS (IN FRONT OF MOUNTAIN) — flares/drops already drawn behind ──
+      if (eruptionParticles.length > 0) {
+        for (const p of eruptionParticles) {
+          if (p.type === 'flare' || p.type === 'drop') continue;
+          if (p.x < -40 || p.x > W + 40 || p.y > H + 20) continue;
+          const lifeFrac = p.life / p.maxLife;
+          const alpha = Math.min(1, lifeFrac * 2);
+          ctx.globalAlpha = alpha;
+
+          // Color: bright yellow/white → orange → dark red as it cools
+          let r, g, b;
+          if (p.heat > 0.7 && lifeFrac > 0.6) {
+            r = 255; g = 220 + Math.floor(Math.random() * 35); b = 100 + Math.floor(Math.random() * 80);
+          } else if (lifeFrac > 0.4) {
+            r = 255; g = 120 + Math.floor(lifeFrac * 100); b = 20 + Math.floor(Math.random() * 30);
+          } else {
+            r = 180 + Math.floor(lifeFrac * 75); g = 40 + Math.floor(lifeFrac * 60); b = 10;
+          }
+
+          // Clamp draw position so particles above screen still render as tall streaks
+          const drawY = Math.max(-20, p.y);
+          const px = Math.floor(p.x / P) * P;
+          const py = Math.floor(drawY / P) * P;
+
+          if (p.type === 'flare') {
+            // THICK LAVA FLARE — chunky molten blob with trailing column
+            const sz = Math.max(P * 3, Math.floor(p.size / P) * P);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            // Main chunky blob
+            ctx.fillRect(px - sz / 2, py, sz, sz);
+            ctx.fillRect(px - sz / 2 + P, py - P, sz - P * 2, P);
+            ctx.fillRect(px - sz / 2 + P, py + sz, sz - P * 2, P);
+
+            // Molten white-hot core
+            const coreAlpha = Math.min(1, lifeFrac * 1.2) * 0.85;
+            ctx.fillStyle = `rgba(255,250,200,${coreAlpha.toFixed(2)})`;
+            ctx.fillRect(px - sz / 2 + P * 2, py + P, sz - P * 4 || P, sz - P * 2 || P);
+
+            // Long trailing streak below (the flare column it came from)
+            const trailLen = Math.floor(8 + lifeFrac * 10);
+            for (let t = 1; t <= trailLen; t++) {
+              const ty = py + t * P * 2;
+              if (ty > H + 10) break;
+              const ta = alpha * (1 - t / (trailLen + 2)) * 0.75;
+              ctx.globalAlpha = ta;
+              const trailR = Math.min(255, r + 10);
+              const trailG = Math.max(0, g - 20);
+              ctx.fillStyle = `rgb(${trailR},${trailG},${b})`;
+              const trailW = Math.max(P, sz - Math.floor(t / 2) * P);
+              ctx.fillRect(px - trailW / 2, ty, trailW, P * 2);
+            }
+            ctx.globalAlpha = alpha;
+          } else if (p.type === 'drop') {
+            // Huge reverse lava drops — massive chunky blobs
+            const sz = Math.max(P * 4, Math.floor(p.size / P) * P);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(px - sz / 2, py, sz, sz);
+            ctx.fillRect(px - sz / 2 + P, py - P, sz - P * 2, P);
+            ctx.fillRect(px - sz / 2 + P, py + sz, sz - P * 2, P);
+            ctx.fillRect(px - sz / 2 - P, py + P, P, sz - P * 2);
+            ctx.fillRect(px - sz / 2 + sz, py + P, P, sz - P * 2);
+
+            // Bright white-hot core
+            const coreAlpha = Math.min(1, lifeFrac * 1.3) * 0.9;
+            ctx.fillStyle = `rgba(255,255,220,${coreAlpha.toFixed(2)})`;
+            ctx.fillRect(px - sz / 2 + P * 2, py + P * 2, sz - P * 4, sz - P * 4);
+
+            // Dripping trail behind
+            const trailLen = 6;
+            for (let t = 1; t <= trailLen; t++) {
+              const ty = py + sz + t * P * 3;
+              if (ty > H + 10) break;
+              const ta = alpha * (1 - t / (trailLen + 1)) * 0.7;
+              ctx.globalAlpha = ta;
+              ctx.fillStyle = `rgb(${Math.min(255, r + 20)},${Math.max(0, g - 30)},${b})`;
+              const dripW = Math.max(P, P * (3 - Math.floor(t / 2)));
+              ctx.fillRect(px - dripW / 2, ty, dripW, P * 2);
+            }
+            ctx.globalAlpha = alpha;
+          } else {
+            // Sparks — small fast pixels
+            const sz = Math.max(P, Math.floor(p.size * (0.5 + lifeFrac * 0.5) / P) * P);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(px, py, sz, sz);
+
+            if (lifeFrac > 0.7 && p.heat > 0.6) {
+              ctx.fillStyle = `rgba(255,255,200,${(alpha * 0.5).toFixed(2)})`;
+              ctx.fillRect(px, py, P, P);
+            }
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Draw ledges, gas clouds, birds, player
+      drawClimbLedges();
+      drawGasClouds();
+      drawClimbBirds();
+      // Front-layer player draw — skipped only once we've swapped to the back layer (past jump apex)
+      if (!(summitJumping && summitJumpPastApex)) drawPlayer();
+
+      // ── FOREGROUND SMOKE LAYER — in front of everything, drifts right ──
+      drawSummitSmokeLayer(smokeTopY, smokeBotY, P, 2);
+
+      // Gas tint overlay
+      if (gasExposure > 10) {
+        const gasAlpha = Math.min(0.3, (gasExposure / GAS_KILL_THRESHOLD) * 0.35);
+        ctx.fillStyle = `rgba(100, 180, 40, ${gasAlpha})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Summit — "Press SPACE" prompt when waiting for input
+      if (summitWaitingForInput && !summitConfirmed) {
+        // Darken screen slightly
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.textAlign = 'center';
+        ctx.shadowColor = '#ffcc44';
+        ctx.shadowBlur = 20;
+        ctx.fillStyle = '#ffcc44';
+        ctx.font = FONT_14B;
+        ctx.fillText('THE SUMMIT', W / 2, H / 2 - 30);
+        ctx.shadowBlur = 0;
+
+        const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffaa66';
+        ctx.font = FONT_12;
+        ctx.fillText('Press SPACE to continue', W / 2, H / 2 + 10);
+        ctx.globalAlpha = 1;
+        ctx.textAlign = 'left';
+      }
+
+      playerDrawnInDepth = true;
+    } else if (isVolcanoLevel()) {
       // ── LAYER 1: BACK TREES (behind ground + player) ──
       _updateTreeConsts();
       for (const t of trees) {
@@ -7006,7 +9209,94 @@ function draw() {
         if (sx < -200 || sx > W + 200) continue;
         drawSingleTree(t);
       }
-      drawVolcanicGround();
+      // ── CLIFF TRANSITION: cliff wall scrolls in from the right — draw BEFORE ground so ground stays in front ──
+      if (level === 6 && cliffTransition > 0 && !verticalMode) {
+        const P = 4;
+        const WPAL = {
+          deep: '#0c0604', dark: '#160d08', mid: '#24160e',
+          surface: '#362010', light: '#4a2e1a', edge: '#5c3820',
+          shadow: '#080402', lavaD: '#882200', lava: '#cc4400', lavaH: '#ffaa22'
+        };
+        // The cliff is a world-space wall at cliffWorldX — scrolls in naturally from the right
+        const cliffScreenX = Math.floor(cliffWorldX - scrollOffset);
+
+        // Only draw the cliff if it's on screen
+        if (cliffScreenX < W) {
+          const drawLeft = Math.max(0, cliffScreenX);
+          const groundY = GROUND_Y; // flat ground during transition
+
+          // Darken sky behind the cliff area
+          ctx.fillStyle = 'rgba(10, 6, 4, 0.6)';
+          ctx.fillRect(drawLeft, 0, W - drawLeft, groundY);
+
+          // Rock face — from cliffScreenX to right edge of screen, top to ground
+          for (let y = 0; y < groundY; y += P) {
+            const worldRow = Math.floor(y / P);
+            for (let x = drawLeft; x < W; x += P) {
+              // Use world-space X for consistent texture as it scrolls
+              const worldX = x + scrollOffset;
+              const h = ((worldX * 7919 + worldRow * 4813 + 31337) >>> 0) & 0xFFFF;
+              const bandPhase = ((worldRow + worldX * 0.3) * 0.08) % 1;
+              let color;
+              if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+              else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+              else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+              else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+              else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+              ctx.fillStyle = color;
+              ctx.fillRect(x, y, P, P);
+            }
+            // Crevice cracks
+            if ((worldRow & 3) === 0) {
+              for (let cx = drawLeft; cx < W; cx += P * 7) {
+                const worldCX = cx + scrollOffset;
+                const ch = ((worldCX * 16807 + worldRow * 48271) >>> 0) & 0xFFFF;
+                if ((ch & 7) !== 0) continue;
+                ctx.fillStyle = WPAL.shadow;
+                ctx.fillRect(cx, y, P, P);
+              }
+            }
+          }
+
+          // Jagged left edge of the cliff face
+          if (cliffScreenX > 0) {
+            for (let y = 0; y < groundY; y += P) {
+              const eh = ((y * 2654435761 >>> 16) % 6);
+              for (let j = 0; j < eh; j++) {
+                const edgeX = cliffScreenX - (j + 1) * P;
+                if (edgeX >= 0 && edgeX < W) {
+                  const h = ((y * 7919 + j * 4813) >>> 0) & 0xFFFF;
+                  ctx.fillStyle = h % 3 === 0 ? WPAL.dark : WPAL.deep;
+                  ctx.fillRect(edgeX, y, P, P);
+                }
+              }
+            }
+          }
+
+          // Ledge previews on the cliff face
+          const cliffWidth = W - drawLeft;
+          if (cliffWidth > 60) {
+            for (const ledge of climbLedges) {
+              const ledgeProgress = Math.abs(ledge.worldY) / CLIMB_TOTAL_HEIGHT;
+              if (ledgeProgress > 0.15) continue;
+              // Map ledge worldY onto the visible cliff height
+              const previewY = groundY - 30 + (ledge.worldY * (groundY - 40) / (CLIMB_TOTAL_HEIGHT * 0.15));
+              if (previewY < 0 || previewY > groundY) continue;
+              // Map ledge worldX into the cliff area on screen
+              const ledgeScreenX = drawLeft + (ledge.worldX / W) * cliffWidth;
+              const lw = Math.max(4, ledge.w * cliffWidth / W);
+              if (ledgeScreenX + lw < drawLeft || ledgeScreenX > W) continue;
+              ctx.fillStyle = WPAL.surface;
+              ctx.fillRect(ledgeScreenX, previewY, lw, P * 2);
+              ctx.fillStyle = WPAL.light;
+              ctx.fillRect(ledgeScreenX, previewY, lw, P);
+              ctx.fillStyle = WPAL.shadow;
+              ctx.fillRect(ledgeScreenX, previewY + P * 2, lw, P);
+            }
+          }
+        }
+      }
+      drawVolcanicGround(); // draws after cliff so ground stays in front
     } else {
       drawStreet();
     }
@@ -7163,8 +9453,12 @@ function gameTick() {
     transitionTimer--;
     if (transitionTimer <= 0) {
       gameState = 'playing';
-      // Only restart music if it's not already playing (fresh game)
+      // Switch music if the track changed for this level
       const curM = getCurrentMusic();
+      // Stop any other level music that shouldn't be playing
+      if (curM !== levelMusic) { levelMusic.pause(); levelMusic.currentTime = 0; }
+      if (curM !== volcanoMusic) { volcanoMusic.pause(); volcanoMusic.currentTime = 0; }
+      if (curM !== volcanoDescentMusic) { volcanoDescentMusic.pause(); volcanoDescentMusic.currentTime = 0; }
       if (curM.paused) {
         playCurrentMusic();
       }
