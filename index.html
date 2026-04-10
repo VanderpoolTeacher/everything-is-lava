@@ -1263,36 +1263,27 @@ let burningVillage = [];
 
 function generateBurningVillage() {
   burningVillage = [];
-  // Sparse structures spread across a wide world strip
-  // Types: hut, house, tower, shrine, collapsed
-  const types = ['hut', 'house', 'house', 'tower', 'shrine', 'collapsed', 'hut', 'collapsed'];
+  // Sparse structures spread across a wide world strip.
+  // Every standing structure is a house: rectangular body + tall peaked triangle roof.
+  // A few collapsed ruins sprinkled in for variety.
+  const types = ['house', 'house', 'hut', 'house', 'hut', 'house', 'collapsed'];
   for (let x = 60; x < W + 1800; x += 140 + Math.random() * 220) {
     const type = types[Math.floor(Math.random() * types.length)];
     let w, h, roofH, roofStyle;
     switch (type) {
       case 'hut':
-        w = 28 + Math.random() * 14;
-        h = 30 + Math.random() * 18;
-        roofH = 14 + Math.random() * 8;
+        // Small cottage
+        w = 30 + Math.random() * 12;
+        h = 26 + Math.random() * 10;
+        roofH = w * 0.65 + Math.random() * 4; // tall triangle roof
         roofStyle = 'peaked';
         break;
       case 'house':
-        w = 36 + Math.random() * 20;
-        h = 40 + Math.random() * 25;
-        roofH = 12 + Math.random() * 10;
-        roofStyle = Math.random() < 0.5 ? 'peaked' : 'flat';
-        break;
-      case 'tower':
-        w = 18 + Math.random() * 10;
-        h = 65 + Math.random() * 40;
-        roofH = 10 + Math.random() * 6;
-        roofStyle = 'pointed';
-        break;
-      case 'shrine':
-        w = 44 + Math.random() * 16;
-        h = 35 + Math.random() * 15;
-        roofH = 18 + Math.random() * 10;
-        roofStyle = 'curved';
+        // Standard house
+        w = 38 + Math.random() * 18;
+        h = 34 + Math.random() * 16;
+        roofH = w * 0.6 + Math.random() * 6; // tall triangle roof
+        roofStyle = 'peaked';
         break;
       case 'collapsed':
         w = 30 + Math.random() * 25;
@@ -1305,8 +1296,8 @@ function generateBurningVillage() {
       x, w, h, roofH, roofStyle, type,
       firePhase: Math.random() * Math.PI * 2,
       fireIntensity: 0.4 + Math.random() * 0.6, // how much it burns
-      hasChimney: type === 'house' && Math.random() < 0.4,
-      lean: (Math.random() - 0.5) * 0.06 // slight structural lean
+      hasChimney: type === 'house' && Math.random() < 0.5,
+      lean: (Math.random() - 0.5) * 0.04 // slight structural lean
     });
   }
 }
@@ -5377,7 +5368,23 @@ function drawDestroyedCitySky() {
     const imgAspect = level2BgImg.width / level2BgImg.height;
     const canvasAspect = W / H;
     let drawW, drawH;
-    if (canvasAspect > imgAspect) {
+    if (level === 5) {
+      // Level 2-2: slight zoom, enough to give vertical headroom for the climb drift
+      drawH = H * 1.25;
+      drawW = drawH * imgAspect;
+      if (drawW < W) {
+        drawW = W;
+        drawH = drawW / imgAspect;
+      }
+    } else if (level === 4) {
+      // Level 2-1: zoom in for a more immersive feel
+      drawH = H * 1.5;
+      drawW = drawH * imgAspect;
+      if (drawW < W) {
+        drawW = W;
+        drawH = drawW / imgAspect;
+      }
+    } else if (canvasAspect > imgAspect) {
       drawW = W;
       drawH = W / imgAspect;
     } else {
@@ -5389,7 +5396,17 @@ function drawDestroyedCitySky() {
     const rawShift = (scrollOffset * 0.01) % (maxShift * 2);
     const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
     const drawX = (W - drawW) / 2 + shiftX;
-    const drawY = (H - drawH) / 2;
+    let drawY = (H - drawH) / 2;
+    // Level 2-2: slowly drift background DOWN over time as if the player is climbing.
+    // Start viewing the LOWER portion of the image (image pushed up → bottom pinned to
+    // canvas bottom), then pan the image DOWN so the camera ends up looking at the UPPER
+    // portion of the image (image top pinned to canvas top).
+    if (level === 5) {
+      const maxShiftY = Math.max(0, (drawH - H) / 2); // headroom above/below center
+      const totalDrift = maxShiftY * 2; // full vertical range: bottom-pinned → top-pinned
+      const driftT = Math.min(1, levelTimer / Math.max(1, levelDuration));
+      drawY += -maxShiftY + totalDrift * driftT;
+    }
     ctx.drawImage(level2BgImg, drawX, drawY, drawW, drawH);
   } else {
     // Fallback gradient if image hasn't loaded yet
@@ -8707,15 +8724,17 @@ function draw() {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (isVolcanoLevel()) {
       if (level === 6 && volcanoBg23Ready) {
-        // Level 2-3: use the volcano-bg-2-3 image for the whole level
+        // Level 2-3: use the volcano-bg-2-3 image for the whole level (zoomed in 25%)
         const imgAspect = volcanoBg23.width / volcanoBg23.height;
-        const drawW = W;
-        const drawH = W / imgAspect;
+        const zoom = 1.25;
+        const drawW = W * zoom;
+        const drawH = drawW / imgAspect;
         // Slow parallax shift based on horizontal scroll
         const maxShift = Math.max(1, (drawW - W) / 2);
         const rawShift = (scrollOffset * 0.008) % (maxShift * 2);
         const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
-        ctx.drawImage(volcanoBg23, shiftX, (H - drawH) / 2, drawW, drawH);
+        const drawX = (W - drawW) / 2 + shiftX;
+        ctx.drawImage(volcanoBg23, drawX, (H - drawH) / 2, drawW, drawH);
       } else {
         drawDestroyedCitySky();
       }
@@ -8725,7 +8744,7 @@ function draw() {
       }
       if (level !== 6) {
         drawMidgroundForest();
-        drawBurningVillage();
+        if (level !== 5) drawBurningVillage();
         drawRuinsLayer(ruins_near, 0.8, 0.1, true);
       }
     } else {
@@ -8765,10 +8784,12 @@ function draw() {
         ctx.rect(0, bgClipTop, W, H - bgClipTop);
         ctx.clip();
         const imgAspect = volcanoBg23.width / volcanoBg23.height;
-        const drawW = W;
-        const drawH = W / imgAspect;
+        const zoom = 1.25;
+        const drawW = W * zoom;
+        const drawH = drawW / imgAspect;
+        const drawX = (W - drawW) / 2;
         const bgShift = climbProgress * H * 0.5;
-        ctx.drawImage(volcanoBg23, 0, bgShift, drawW, drawH);
+        ctx.drawImage(volcanoBg23, drawX, bgShift, drawW, drawH);
         ctx.restore();
       } else {
         const skyGrad = ctx.createLinearGradient(0, bgClipTop, 0, H);
