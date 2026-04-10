@@ -1101,7 +1101,6 @@ const player = {
   kickTimer: 0,     // frames into kick animation
   facingRight: true, // last horizontal direction faced
   idleTimer: 0,      // frames since last movement input
-  crouching: false,    // crouch state (down arrow / S key while grounded)
   depthScale: 1,       // perspective scale — >1 on front trees, <1 on back trees
   knockbackTimer: 0    // frames of knockback animation remaining
 };
@@ -3106,8 +3105,6 @@ function respawnPlayer() {
   player.kickTimer = 0;
   player.facingRight = true;
   player.idleTimer = 0;
-  player.crouching = false;
-  player.h = SPRITE_H;
   player.invincible = 120; // ~2 seconds of invincibility
   // Clear immediate threats near player
   lavaDrops = [];
@@ -3372,13 +3369,8 @@ function update() {
     spawnLavaDrop();
   }
 
-  // Handle jump — uncrouch first if needed
+  // Handle jump
   if (jumpBuffered) {
-    if (player.crouching && !verticalMode) {
-      player.crouching = false;
-      player.h = SPRITE_H;
-      player.y = getGroundY(player.x + scrollOffset) - player.h;
-    }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
       player.grounded = false;
@@ -3409,18 +3401,6 @@ function update() {
   // Track facing direction
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
-
-  // Crouch — down arrow or S while grounded (disabled in vertical climb)
-  const wantCrouch = !verticalMode && player.grounded && (keys['ArrowDown'] || keys['KeyS']);
-  if (wantCrouch && !player.crouching) {
-    player.crouching = true;
-    player.h = Math.floor(SPRITE_H * 0.5);
-    player.y = GROUND_Y - player.h; // stay on ground
-  } else if (!wantCrouch && player.crouching) {
-    player.crouching = false;
-    player.h = SPRITE_H;
-    player.y = GROUND_Y - player.h;
-  }
 
   // Idle detection — drop lava on player if they don't move for ~1 second (not in vertical)
   const isMoving = verticalMode || moveX !== 0 || !player.grounded || player.kicking;
@@ -4291,8 +4271,6 @@ let deathAnimActive = false;
 
 function die() {
   if (player.invincible > 0) return; // invincibility frames active
-  player.crouching = false;
-  player.h = SPRITE_H;
   lives--;
   player.alive = false;
   stopSiren();
@@ -4525,11 +4503,6 @@ function updateDojo() {
 
   // Same movement as main game but no lava, no vehicles, no scrolling
   if (jumpBuffered) {
-    if (player.crouching) {
-      player.crouching = false;
-      player.h = SPRITE_H;
-      player.y = GROUND_Y - player.h;
-    }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
       player.grounded = false;
@@ -4557,18 +4530,6 @@ function updateDojo() {
 
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
-
-  // Crouch — down arrow or S while grounded
-  const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
-  if (wantCrouch && !player.crouching) {
-    player.crouching = true;
-    player.h = Math.floor(SPRITE_H * 0.5);
-    player.y = GROUND_Y - player.h;
-  } else if (!wantCrouch && player.crouching) {
-    player.crouching = false;
-    player.h = SPRITE_H;
-    player.y = GROUND_Y - player.h;
-  }
 
   if (player.kicking) {
     player.kickTimer++;
@@ -7291,11 +7252,7 @@ function drawPlayer() {
     let scaleYAnim = 1;
     let scaleXAnim = 1;
 
-    if (player.crouching) {
-      // ── CROUCH ANIMATION ──
-      scaleYAnim = 0.5;   // squash to half height
-      scaleXAnim = 1.2;   // wider to compensate
-    } else if (player.kicking) {
+    if (player.kicking) {
       // ── KICK ANIMATION ──
       // Kick is a fast forward tilt + leg extension
       const kt = player.kickTimer / 20; // 0 to 1
@@ -8501,7 +8458,6 @@ const HELP_LINES = [
   { label: 'MOVEMENT',     keys: 'A/D  or  \u2190/\u2192' },
   { label: 'JUMP',         keys: 'SPACE  W  or  \u2191' },
   { label: 'DOUBLE JUMP',  keys: 'JUMP again mid-air' },
-  { label: 'CROUCH',       keys: 'S  or  \u2193' },
   { label: 'MUTE',         keys: 'M' },
   { label: 'VOLUME',       keys: '+  /  \u2013' },
   { label: 'RESET',        keys: 'Q' },
