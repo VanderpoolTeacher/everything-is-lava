@@ -255,6 +255,7 @@ function stopAllLevelMusic() {
   levelMusic.pause(); levelMusic.currentTime = 0;
   volcanoMusic.pause(); volcanoMusic.currentTime = 0;
   volcanoDescentMusic.pause(); volcanoDescentMusic.currentTime = 0;
+  emeraldCutsceneMusic.pause(); emeraldCutsceneMusic.currentTime = 0;
 }
 function playCurrentMusic() {
   const m = getCurrentMusic();
@@ -296,6 +297,10 @@ gameOverMusic.volume = 0.6;
 const victoryMusic = new Audio('assets/music/congratulations-01.mp3');
 victoryMusic.loop = false;
 victoryMusic.volume = 0.6;
+
+const emeraldCutsceneMusic = new Audio('assets/music/green-emerald-scroll.mp3');
+emeraldCutsceneMusic.loop = false;
+emeraldCutsceneMusic.volume = 0.6;
 
 applyMasterVolume(); // apply initial 50% volume
 
@@ -2710,6 +2715,12 @@ window.addEventListener('keydown', e => {
       menuScrollY = -480;
       titleMusic.currentTime = 0;
       titleMusic.play().catch(() => {});
+    } else if (gameState === 'emeraldCutscene' && storyScrollDone) {
+      // Advance from the emerald cutscene into 2-1
+      emeraldCutsceneMusic.pause();
+      emeraldCutsceneMusic.currentTime = 0;
+      gameState = 'levelComplete';
+      startGame();
     } else if (gameState === 'playing' && summitWaitingForInput && !summitJumping && !summitConfirmed) {
       // Jump HIGH into the volcano — jump straight up from current position
       // Player draws in FRONT of the mountain on the way up, then BEHIND once past the peak
@@ -3315,6 +3326,15 @@ function update() {
       deathTimer = 0;
       victoryMusic.currentTime = 0;
       victoryMusic.play().catch(() => {});
+    } else if (level === 3) {
+      // Finished 1-3: show the emerald cutscene before advancing to 2-1
+      gameState = 'emeraldCutscene';
+      storyScrollY = 0;
+      storyScrollDone = false;
+      deathTimer = 0;
+      stopAllLevelMusic();
+      emeraldCutsceneMusic.currentTime = 0;
+      emeraldCutsceneMusic.play().catch(() => {});
     } else {
       // Skip straight to next level
       gameState = 'levelComplete';
@@ -7616,33 +7636,9 @@ const STORY_LINES = [
   { text: 'And still you ran.', color: '#aabbcc', size: 16 },
   { text: '__BREAK__' },
   { text: '__BREAK__' },
-  { text: 'At the edge of', color: '#998877', size: 16 },
-  { text: 'the village, a figure', color: '#998877', size: 16 },
-  { text: 'steps from the shadow.', color: '#998877', size: 16 },
-  { text: '__BREAK__' },
-  { text: 'A hooded man.', color: '#aabbcc', size: 16 },
-  { text: 'Eyes like embers.', color: '#aabbcc', size: 16 },
-  { text: '__BREAK__' },
-  { text: '__IMAGE__' },
-  { text: '__BREAK__' },
-  { text: 'He holds out', color: '#bbddbb', size: 16 },
-  { text: 'a glowing stone.', color: '#bbddbb', size: 16 },
-  { text: '__BREAK__' },
-  { text: '"You made it through', color: '#44dd88', size: 16 },
-  { text: 'the fire. But the', color: '#44dd88', size: 16 },
-  { text: 'volcano still burns."', color: '#44dd88', size: 16 },
-  { text: '__BREAK__' },
-  { text: '"Take this emerald.', color: '#44dd88', size: 16 },
-  { text: 'Return it to the heart', color: '#44dd88', size: 16 },
-  { text: 'of the mountain."', color: '#44dd88', size: 16 },
-  { text: '__BREAK__' },
-  { text: '"Only then will the', color: '#44dd88', size: 14 },
-  { text: 'fires stop."', color: '#44dd88', size: 14 },
-  { text: '__BREAK__' },
-  { text: '__BREAK__' },
-  { text: 'You take it.', color: '#ffcc88', size: 18, bold: true },
-  { text: 'It burns cold', color: '#ffcc88', size: 18, bold: true },
-  { text: 'in your hand.', color: '#ffcc88', size: 18, bold: true },
+  { text: 'You climbed the mountain.', color: '#bbddbb', size: 16 },
+  { text: 'You returned the emerald', color: '#bbddbb', size: 16 },
+  { text: 'to the heart of the fire.', color: '#bbddbb', size: 16 },
   { text: '__BREAK__' },
   { text: '__BREAK__' },
   { text: 'The journey is not', color: '#aabbcc', size: 16 },
@@ -7664,6 +7660,42 @@ const STORY_LINES = [
   { text: '__BREAK__' },
   { text: '__BREAK__' },
   { text: '__SCORE__' },
+];
+
+// ── EMERALD CUTSCENE (between 1-3 and 2-1) ──
+// The hooded figure scene, extracted from the story scroll so it plays
+// at the gameplay handoff into the volcano arc instead of the ending.
+const EMERALD_CUTSCENE_LINES = [
+  { text: '__BREAK__' },
+  { text: 'At the edge of', color: '#998877', size: 16 },
+  { text: 'the village, a figure', color: '#998877', size: 16 },
+  { text: 'steps from the shadow.', color: '#998877', size: 16 },
+  { text: '__BREAK__' },
+  { text: 'A hooded man.', color: '#aabbcc', size: 16 },
+  { text: 'Eyes like embers.', color: '#aabbcc', size: 16 },
+  { text: '__BREAK__' },
+  { text: '__IMAGE__' },
+  { text: '__BREAK__' },
+  { text: 'He holds out', color: '#bbddbb', size: 16 },
+  { text: 'a glowing stone.', color: '#bbddbb', size: 16 },
+  { text: '__BREAK__' },
+  { text: '"You made it through', color: '#44dd88', size: 16 },
+  { text: 'the fire. But the', color: '#44dd88', size: 16 },
+  { text: 'volcano still burns."', color: '#44dd88', size: 16 },
+  { text: '__BREAK__' },
+  { text: '"Take this emerald.', color: '#44dd88', size: 16 },
+  { text: 'Return it to the heart', color: '#44dd88', size: 16 },
+  { text: 'of the mountain."', color: '#44dd88', size: 16 },
+  { text: '__BREAK__' },
+  { text: '"Only then will the', color: '#44dd88', size: 16 },
+  { text: 'fires stop."', color: '#44dd88', size: 16 },
+  { text: '__BREAK__' },
+  { text: 'You take it.', color: '#ffcc88', size: 16, bold: true },
+  { text: 'It burns cold', color: '#ffcc88', size: 16, bold: true },
+  { text: 'in your hand.', color: '#ffcc88', size: 16, bold: true },
+  { text: '__BREAK__' },
+  { text: 'The volcano rumbles', color: '#ff8844', size: 16, bold: true },
+  { text: 'before you...', color: '#ff8844', size: 16, bold: true },
 ];
 
 function storyLineHeight(l) {
@@ -7838,6 +7870,89 @@ function drawStoryScroll() {
   ctx.fillRect(0, scrollZoneBot - 20, W, H - scrollZoneBot + 20);
 
   // "Press SPACE" prompt once scroll is done
+  if (storyScrollDone) {
+    const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffaa66';
+    ctx.font = FONT_12;
+    ctx.textAlign = 'center';
+    ctx.fillText('Press SPACE to continue', W / 2, H - 18);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawEmeraldCutscene() {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+
+  const scrollZoneTop = 40;
+  const scrollZoneBot = H - 40;
+  const fadeZone = 40;
+
+  let drawY = H + 60 - storyScrollY * STORY_LINE_H;
+
+  // Mark done when the last line's center reaches screen middle
+  let endY = drawY;
+  for (let i = 0; i < EMERALD_CUTSCENE_LINES.length; i++) {
+    endY += storyLineHeight(EMERALD_CUTSCENE_LINES[i]);
+  }
+  if (endY < H / 2 + 20) {
+    storyScrollDone = true;
+  }
+
+  for (let i = 0; i < EMERALD_CUTSCENE_LINES.length; i++) {
+    const l = EMERALD_CUTSCENE_LINES[i];
+    const lineH = storyLineHeight(l);
+
+    if (l.text === '__BREAK__') {
+      drawY += lineH;
+      continue;
+    }
+
+    if (l.text === '__IMAGE__') {
+      if (emeraldReady) {
+        const imgX = W / 2 - STORY_IMG_SIZE / 2;
+        const imgMid = drawY + STORY_IMG_SIZE / 2;
+        if (imgMid > scrollZoneTop - STORY_IMG_SIZE && imgMid < scrollZoneBot + STORY_IMG_SIZE) {
+          const fadeTop = Math.min(1, (imgMid - scrollZoneTop) / fadeZone);
+          const fadeBot = Math.min(1, (scrollZoneBot - imgMid) / fadeZone);
+          ctx.globalAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
+          ctx.drawImage(emeraldImg, imgX, drawY, STORY_IMG_SIZE, STORY_IMG_SIZE);
+        }
+      }
+      drawY += lineH;
+      continue;
+    }
+
+    drawY += lineH;
+    if (drawY < scrollZoneTop - 20 || drawY > scrollZoneBot + 20) continue;
+
+    const fadeTop = Math.min(1, (drawY - scrollZoneTop) / fadeZone);
+    const fadeBot = Math.min(1, (scrollZoneBot - drawY) / fadeZone);
+    const lineAlpha = Math.max(0, Math.min(fadeTop, fadeBot));
+    if (lineAlpha <= 0) continue;
+
+    ctx.globalAlpha = lineAlpha;
+    ctx.fillStyle = l.color || '#ffffff';
+    ctx.font = `${l.bold ? 'bold ' : ''}${l.size}px ${GAME_FONT}`;
+    ctx.fillText(l.text, W / 2, drawY);
+  }
+
+  ctx.globalAlpha = 1;
+
+  // Edge vignettes
+  const vigGrad = ctx.createLinearGradient(0, 0, 0, scrollZoneTop + 20);
+  vigGrad.addColorStop(0, 'rgba(0,0,0,1)');
+  vigGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = vigGrad;
+  ctx.fillRect(0, 0, W, scrollZoneTop + 20);
+  const vigBot = ctx.createLinearGradient(0, scrollZoneBot - 20, 0, H);
+  vigBot.addColorStop(0, 'rgba(0,0,0,0)');
+  vigBot.addColorStop(1, 'rgba(0,0,0,1)');
+  ctx.fillStyle = vigBot;
+  ctx.fillRect(0, scrollZoneBot - 20, W, H - scrollZoneBot + 20);
+
   if (storyScrollDone) {
     const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
     ctx.globalAlpha = pulse;
@@ -8540,6 +8655,8 @@ function draw() {
     drawDojo();
   } else if (gameState === 'sfx') {
     drawSfxScreen();
+  } else if (gameState === 'emeraldCutscene') {
+    drawEmeraldCutscene();
   } else {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (isVolcanoLevel()) {
@@ -9302,6 +9419,13 @@ function gameTick() {
   if (gameState === 'victory' && !storyScrollDone) {
     if (deathTimer > 120) { // 2 second pause before scroll starts
       storyScrollY += 0.025; // ~0.7 px/frame (0.025 * STORY_LINE_H 28)
+    }
+  }
+  // Advance the emerald cutscene scroll between 1-3 and 2-1
+  if (gameState === 'emeraldCutscene') {
+    deathTimer++;
+    if (!storyScrollDone && deathTimer > 3) { // near-immediate start
+      storyScrollY += 0.022;
     }
   }
   if (gameState === 'transition') {
