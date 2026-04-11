@@ -95,6 +95,8 @@ let demonCutsceneTimer = 0;
 let demonCutsceneRumbleScheduled = false;
 let demonCutsceneRoarScheduled = false;
 let demonCutsceneDone = false;
+let demonCutscenePlayerX = 0;     // captured player.x at the moment level 8 ends
+let demonCutscenePlayerY = 0;     // captured player.y at the moment level 8 ends
 const DEMON_CUTSCENE_LEN = 680;   // ~11 seconds at 60fps (rise + line1 + gap + line2)
 
 // Climb birds — fly across screen during vertical climb, knockback but don't kill
@@ -3936,7 +3938,9 @@ function update() {
   if (levelComplete) {
     if (!konamiUsed) score += level * 1000;
     if (level === 8) {
-      // End of 3-2 → demon-rise cutscene before the final victory
+      // End of 3-2 → demon-rise cutscene before the final victory.
+      // Capture the player's exact screen position so the cutscene shows
+      // them standing right where the level ended.
       stopAllLevelMusic();
       stopSiren();
       stopPoliceSiren();
@@ -3947,6 +3951,8 @@ function update() {
       demonCutsceneRumbleScheduled = false;
       demonCutsceneRoarScheduled = false;
       demonCutsceneDone = false;
+      demonCutscenePlayerX = player.x;
+      demonCutscenePlayerY = player.y;
       return;
     }
     if (level >= 8) {
@@ -8892,12 +8898,10 @@ function drawDemonCutscene() {
     ctx.imageSmoothingEnabled = true;
   }
 
-  // Player silhouette in the foreground (off to the right, facing the demon)
+  // Player drawn at the exact position they were standing when level 8 ended
   if (typeof ninjaSprite !== 'undefined' && spriteReady) {
-    const pcx = W * 0.78;
-    const pby = H - 60;
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(ninjaSprite, pcx - SPRITE_W / 2, pby - SPRITE_H, SPRITE_W, SPRITE_H);
+    ctx.drawImage(ninjaSprite, demonCutscenePlayerX, demonCutscenePlayerY, SPRITE_W, SPRITE_H);
     ctx.imageSmoothingEnabled = true;
   }
 
@@ -8942,21 +8946,24 @@ function drawDemonCutscene() {
     ctx.drawImage(off, dx - pad, dy - pad);
   }
 
-  // ── Narration — two lines that appear one at a time with fades ──
-  // Demon rise ends at ~frame 240. Each line fades in, holds, then fades out.
+  // ── Narration — two phases, each with two visual lines, fades in/out ──
+  // Demon rise ends at ~frame 240. Each phase fades in, holds, then fades out.
   const LINE1_START = 260, LINE1_END = 440;
   const LINE2_START = 460, LINE2_END = 640;
-  let narrText = '';
+  let narrLineA = '';
+  let narrLineB = '';
   let narrColor = '';
   let narrAlpha = 0;
   if (demonCutsceneTimer >= LINE1_START && demonCutsceneTimer < LINE1_END) {
-    narrText = '"The emerald was never meant to be returned..."';
+    narrLineA = '"The emerald was never meant';
+    narrLineB = 'to be returned..."';
     narrColor = '#ffcc88';
     const t2 = demonCutsceneTimer - LINE1_START;
     const dur = LINE1_END - LINE1_START;
     narrAlpha = t2 < 25 ? t2 / 25 : (dur - t2) < 25 ? (dur - t2) / 25 : 1;
   } else if (demonCutsceneTimer >= LINE2_START && demonCutsceneTimer < LINE2_END) {
-    narrText = '"You will pay for your actions, with your life!"';
+    narrLineA = '"You will pay for your actions,';
+    narrLineB = 'with your life!"';
     narrColor = '#ff5522';
     const t2 = demonCutsceneTimer - LINE2_START;
     const dur = LINE2_END - LINE2_START;
@@ -8965,9 +8972,9 @@ function drawDemonCutscene() {
   if (narrAlpha > 0) {
     ctx.globalAlpha = narrAlpha;
     const boxW = 720;
-    const boxH = 70;
+    const boxH = 100;
     const boxX = W / 2 - boxW / 2;
-    const boxY = H - 120;
+    const boxY = H - 140;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
     ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeStyle = '#cc4400';
@@ -8979,7 +8986,8 @@ function drawDemonCutscene() {
     ctx.textAlign = 'center';
     ctx.fillStyle = narrColor;
     ctx.font = `bold 18px ${GAME_FONT}`;
-    ctx.fillText(narrText, W / 2, boxY + 44);
+    ctx.fillText(narrLineA, W / 2, boxY + 38);
+    ctx.fillText(narrLineB, W / 2, boxY + 70);
     ctx.textAlign = 'left';
     ctx.globalAlpha = 1;
   }
