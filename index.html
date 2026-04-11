@@ -85,6 +85,11 @@ const DESCENT_TOTAL_HEIGHT = 4000; // total vertical descent span
 // Convert descent world Y (0 at top, positive downward) to screen Y
 function descentScreenY(worldY) { return DESCENT_TOP_Y + worldY - scrollOffsetY; }
 
+// Level 3-2 dragon altar sequence state
+let altarSequence = 'none';       // 'none' | 'ready' | 'placing' | 'glow' | 'done'
+let altarSeqTimer = 0;            // frames elapsed in the current altar phase
+const CRUMBLE_TELEGRAPH = 95;     // frames from first touch to full collapse (~1.5s)
+
 // Climb birds — fly across screen during vertical climb, knockback but don't kill
 let climbBirds = [];  // { x, y, vx, frame, timer, w, h, dir }
 
@@ -205,6 +210,11 @@ volcanoBg23.src = 'assets/volcano-bg-2-3.png';
 let volcanoBg23Ready = false;
 volcanoBg23.onload = function() { volcanoBg23Ready = true; };
 
+const stoneDragonImg = new Image();
+stoneDragonImg.src = 'assets/stone-dragon.png';
+let stoneDragonReady = false;
+stoneDragonImg.onload = function() { stoneDragonReady = true; };
+
 const moltenRockImg = new Image();
 moltenRockImg.src = 'assets/molten-rock.png';
 let moltenRockImgReady = false;
@@ -259,7 +269,7 @@ function getCurrentMusic() {
   // Level 1 (1-1 to 1-3): neo-tokyo music
   // Level 2 (2-1 to 2-3): volcano climb music
   // Level 3 (3-1): volcano descent music
-  if (level === 7) return volcanoDescentMusic;
+  if (level === 7 || level === 8) return volcanoDescentMusic;
   if (isVolcanoLevel()) return volcanoMusic;
   return levelMusic;
 }
@@ -880,6 +890,169 @@ function playRockBounce(size) {
 }
 
 // Rock hits player — heavy slam with crunch
+// Emerald-place — magical chime when the emerald slots into the dragon altar
+function playEmeraldPlace() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.8;
+    // Bright crystalline chime — stacked sine harmonics
+    const freqs = [880, 1320, 1760, 2640];
+    const dur = 1.2;
+    for (let i = 0; i < freqs.length; i++) {
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freqs[i], now);
+      const gain = ac.createGain();
+      const peak = vol * (0.35 - i * 0.06);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(peak, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      osc.connect(gain);
+      gain.connect(ac.destination);
+      autoCleanup(osc, [osc, gain]);
+      osc.start(now + i * 0.03);
+      osc.stop(now + dur + 0.05);
+    }
+    // Sparkling noise burst
+    const noiseBuf = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.5), ac.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) {
+      nd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / nd.length, 2);
+    }
+    const noise = ac.createBufferSource();
+    noise.buffer = noiseBuf;
+    const hp = ac.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 4000;
+    const nGain = ac.createGain();
+    nGain.gain.setValueAtTime(vol * 0.3, now);
+    nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    noise.connect(hp);
+    hp.connect(nGain);
+    nGain.connect(ac.destination);
+    autoCleanup(noise, [noise, hp, nGain]);
+    noise.start(now);
+  } catch(e) {}
+}
+
+// Dragon roar — deep growling descending howl
+function playDragonRoar() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * 0.9;
+    const dur = 2.2;
+    // Main growl — sawtooth with pitch bend and vibrato
+    const main = ac.createOscillator();
+    main.type = 'sawtooth';
+    main.frequency.setValueAtTime(140, now);
+    main.frequency.linearRampToValueAtTime(90, now + 0.4);
+    main.frequency.linearRampToValueAtTime(70, now + 1.2);
+    main.frequency.linearRampToValueAtTime(50, now + 2.0);
+    // Vibrato LFO on frequency
+    const lfo = ac.createOscillator();
+    lfo.frequency.value = 9;
+    const lfoGain = ac.createGain();
+    lfoGain.gain.value = 12;
+    lfo.connect(lfoGain);
+    lfoGain.connect(main.frequency);
+    // Formant filter for animal voice
+    const formant = ac.createBiquadFilter();
+    formant.type = 'bandpass';
+    formant.frequency.setValueAtTime(450, now);
+    formant.frequency.linearRampToValueAtTime(250, now + dur);
+    formant.Q.value = 1.8;
+    const mainGain = ac.createGain();
+    mainGain.gain.setValueAtTime(0, now);
+    mainGain.gain.linearRampToValueAtTime(vol * 0.6, now + 0.1);
+    mainGain.gain.setValueAtTime(vol * 0.6, now + 1.4);
+    mainGain.gain.linearRampToValueAtTime(0, now + dur);
+    main.connect(formant);
+    formant.connect(mainGain);
+    mainGain.connect(ac.destination);
+    autoCleanup(main, [main, lfo, lfoGain, formant, mainGain]);
+    main.start(now); lfo.start(now);
+    main.stop(now + dur + 0.1); lfo.stop(now + dur + 0.1);
+    // Sub-bass layer for body
+    const sub = ac.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(70, now);
+    sub.frequency.exponentialRampToValueAtTime(35, now + dur);
+    const subGain = ac.createGain();
+    subGain.gain.setValueAtTime(0, now);
+    subGain.gain.linearRampToValueAtTime(vol * 0.8, now + 0.15);
+    subGain.gain.setValueAtTime(vol * 0.8, now + 1.4);
+    subGain.gain.linearRampToValueAtTime(0, now + dur);
+    sub.connect(subGain);
+    subGain.connect(ac.destination);
+    autoCleanup(sub, [sub, subGain]);
+    sub.start(now); sub.stop(now + dur + 0.1);
+    // Noisy texture for throatiness
+    const noiseBuf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    const noise = ac.createBufferSource();
+    noise.buffer = noiseBuf;
+    const nFilter = ac.createBiquadFilter();
+    nFilter.type = 'bandpass';
+    nFilter.frequency.setValueAtTime(400, now);
+    nFilter.frequency.linearRampToValueAtTime(200, now + dur);
+    nFilter.Q.value = 1.2;
+    const nGain = ac.createGain();
+    nGain.gain.setValueAtTime(0, now);
+    nGain.gain.linearRampToValueAtTime(vol * 0.25, now + 0.15);
+    nGain.gain.setValueAtTime(vol * 0.25, now + 1.4);
+    nGain.gain.linearRampToValueAtTime(0, now + dur);
+    noise.connect(nFilter);
+    nFilter.connect(nGain);
+    nGain.connect(ac.destination);
+    autoCleanup(noise, [noise, nFilter, nGain]);
+    noise.start(now);
+  } catch(e) {}
+}
+
+// Rock-crumble — dry grinding rumble for crumbling platforms
+function playRockCrumble(strength) {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const vol = (muted ? 0 : masterVolume) * (strength || 0.4);
+    // Filtered crunch noise burst
+    const crunch = ac.createBufferSource();
+    crunch.buffer = getCrunchBuf(ac);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    lp.Q.value = 0.8;
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 350;
+    bp.Q.value = 1.2;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    crunch.connect(lp);
+    lp.connect(bp);
+    bp.connect(gain);
+    gain.connect(ac.destination);
+    autoCleanup(crunch, [crunch, lp, bp, gain]);
+    crunch.start(now);
+    // Low rumble underneath
+    const osc = ac.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(60, now);
+    osc.frequency.exponentialRampToValueAtTime(35, now + 0.22);
+    const oscGain = ac.createGain();
+    oscGain.gain.setValueAtTime(vol * 0.6, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    osc.connect(oscGain);
+    oscGain.connect(ac.destination);
+    autoCleanup(osc, [osc, oscGain]);
+    osc.start(now); osc.stop(now + 0.28);
+  } catch(e) {}
+}
+
 function playRockHit() {
   try {
     const ac = getAudioCtx();
@@ -2345,6 +2518,119 @@ function generateFireJets() {
   fireJets = [];
 }
 
+function generateCrumblingDescent() {
+  descentLedges = [];
+  // Wider altar platform at the very bottom — always solid, not crumbling.
+  const ALTAR_W = W * 0.7;
+  const ALTAR_X = (W - ALTAR_W) / 2;
+  const ALTAR_WORLD_Y = DESCENT_TOTAL_HEIGHT - 60;
+
+  // Starting platform in the middle of the screen (same as 3-1)
+  descentLedges.push({
+    worldX: W * 0.3,
+    worldY: (H / 2) - DESCENT_TOP_Y,
+    w: W * 0.4,
+    h: 14,
+    seed: Math.floor(Math.random() * 99999),
+    isStart: true,
+    crumbles: false
+  });
+
+  // Dense alternating ledges — ~1.5x the density of 3-1.
+  const MIN_VERT_GAP = 80;
+  const MAX_VERT_GAP = 115;
+  const WALL_PAD = 40;
+  const MIN_LEDGE_W = 70;
+  const MAX_LEDGE_W = 140;
+
+  const startWorldY = (H / 2) - DESCENT_TOP_Y;
+  let wy = startWorldY + 110; // first alternating ledge below the start platform
+  let prevX = W * 0.3;
+  let prevW = W * 0.4;
+  while (wy < ALTAR_WORLD_Y - 180) {
+    const ledgeW = MIN_LEDGE_W + Math.random() * (MAX_LEDGE_W - MIN_LEDGE_W);
+    const minX = WALL_PAD;
+    const maxX = W - WALL_PAD - ledgeW;
+    let x;
+    let attempts = 0;
+    do {
+      x = minX + Math.random() * (maxX - minX);
+      attempts++;
+    } while (attempts < 12 && !(x + ledgeW < prevX - 10 || x > prevX + prevW + 10));
+    if (x + ledgeW >= prevX - 10 && x <= prevX + prevW + 10) {
+      if (prevX + prevW / 2 < W / 2) {
+        x = Math.min(maxX, prevX + prevW + 20 + Math.random() * 40);
+      } else {
+        x = Math.max(minX, prevX - ledgeW - 20 - Math.random() * 40);
+      }
+    }
+    descentLedges.push({
+      worldX: x, worldY: wy, w: ledgeW, h: 14,
+      seed: Math.floor(Math.random() * 99999),
+      crumbles: Math.random() < 0.5
+    });
+    prevX = x;
+    prevW = ledgeW;
+    wy += MIN_VERT_GAP + Math.random() * (MAX_VERT_GAP - MIN_VERT_GAP);
+  }
+
+  // Altar landing platform — wide, solid, tagged for the end sequence
+  descentLedges.push({
+    worldX: ALTAR_X,
+    worldY: ALTAR_WORLD_Y,
+    w: ALTAR_W,
+    h: 18,
+    seed: Math.floor(Math.random() * 99999),
+    isAltar: true,
+    crumbles: false
+  });
+}
+
+function generateAltarSpouts() {
+  lavaSpouts = [];
+  // Regular arcing lava spouts along the descent — STOP well before the altar
+  // so the bottom chamber is clear.
+  const ALTAR_CLEAR_Y = DESCENT_TOTAL_HEIGHT - 320;
+  for (let wy = 320; wy < ALTAR_CLEAR_Y; wy += 200 + Math.random() * 180) {
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    lavaSpouts.push({
+      worldY: wy,
+      dir,
+      period: 220 + Math.floor(Math.random() * 120),
+      telegraphFrames: 40,
+      onFrames: 120,
+      phase: Math.floor(Math.random() * 300),
+      activeAfter: 0
+    });
+  }
+  // Altar geysers — straight-up lava columns on the LEFT and RIGHT edges of
+  // the altar platform. Dormant until the player triggers the altar sequence.
+  const altarWorldY = DESCENT_TOTAL_HEIGHT - 60;
+  const ALTAR_W = W * 0.7;
+  const ALTAR_X = (W - ALTAR_W) / 2;
+  const leftX = ALTAR_X + 18;
+  const rightX = ALTAR_X + ALTAR_W - 18;
+  const sidePositions = [
+    { x: leftX,  offset: 0 },
+    { x: leftX + 28,  offset: 70 },
+    { x: rightX, offset: 35 },
+    { x: rightX - 28, offset: 105 }
+  ];
+  for (const p of sidePositions) {
+    lavaSpouts.push({
+      worldX: p.x,
+      worldY: altarWorldY,
+      dir: 0,
+      vertical: true,
+      period: 160,
+      telegraphFrames: 30,
+      onFrames: 90,
+      phase: p.offset,
+      activeAfter: -1 // gated on altarSequence
+    });
+  }
+}
+
 function generateDescentSmoke() {
   descentSmoke = [];
   // Mixed grey/black atmospheric smoke and occasional toxic clouds.
@@ -2782,7 +3068,7 @@ window.addEventListener('keydown', e => {
   // Konami code detection — enter code, then press 1/2/3 to jump to level
   if (konamiActive) {
     // Waiting for level number after code was entered
-    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : e.code === 'Digit5' ? 5 : e.code === 'Digit6' ? 6 : e.code === 'Digit7' ? 7 : 0;
+    const levelNum = e.code === 'Digit1' ? 1 : e.code === 'Digit2' ? 2 : e.code === 'Digit3' ? 3 : e.code === 'Digit4' ? 4 : e.code === 'Digit5' ? 5 : e.code === 'Digit6' ? 6 : e.code === 'Digit7' ? 7 : e.code === 'Digit8' ? 8 : 0;
     if (levelNum > 0) {
       konamiActive = false;
       konamiUsed = true;
@@ -2822,13 +3108,14 @@ window.addEventListener('keydown', e => {
         generateStreetLamps();
       }
       if (levelNum >= 4) {
-        if (levelNum !== 6 && levelNum !== 7) generateTrees();
+        if (levelNum !== 6 && levelNum !== 7 && levelNum !== 8) generateTrees();
         else trees = [];
         generateRuins();
         generateBurningVillage();
         if (levelNum === 5) generateLavaPits();
         if (levelNum === 6) { generateLavaPits(); generateClimbLedges(); generateGasClouds(); generateSummitSmoke(); }
         if (levelNum === 7) { generateDescentLedges(); generateLavaSpouts(); generateSummitSmoke(); }
+        if (levelNum === 8) { generateCrumblingDescent(); generateAltarSpouts(); generateSummitSmoke(); }
       }
       // Reset vertical/descent state and place the player for the chosen level
       verticalMode = false;
@@ -2838,7 +3125,9 @@ window.addEventListener('keydown', e => {
       gasExposure = 0;
       descentMode = false;
       descentReached = false;
-      if (levelNum === 7) {
+      altarSequence = 'none';
+      altarSeqTimer = 0;
+      if (levelNum === 7 || levelNum === 8) {
         descentMode = true;
         const startLedge = descentLedges.find(l => l.isStart);
         if (startLedge) {
@@ -3211,7 +3500,7 @@ function clearGameState() {
 function startGame() {
   const fromLevelComplete = gameState === 'levelComplete';
   if (fromLevelComplete) {
-    level = Math.min(level + 1, 7);
+    level = Math.min(level + 1, 8);
     levelDuration = 1800 + level * 300;
   } else {
     level = 1;
@@ -3285,13 +3574,14 @@ function startGame() {
     generateStreetLamps();
   }
   if (isVolcanoLevel()) {
-    if (level !== 6 && level !== 7) generateTrees();
+    if (level !== 6 && level !== 7 && level !== 8) generateTrees();
     else trees = []; // clear leftover trees from previous level
     generateRuins();
     generateBurningVillage();
     if (level === 5) generateLavaPits();
     if (level === 6) { generateLavaPits(); generateClimbLedges(); generateGasClouds(); generateSummitSmoke(); }
     if (level === 7) { generateDescentLedges(); generateLavaSpouts(); generateSummitSmoke(); }
+    if (level === 8) { generateCrumblingDescent(); generateAltarSpouts(); generateSummitSmoke(); }
   }
   // Reset level 2-3 vertical state
   verticalMode = false;
@@ -3299,9 +3589,11 @@ function startGame() {
   scrollOffsetY = 0;
   playerWorldY = 0;
   gasExposure = 0;
-  // Reset level 3-1 descent state
+  // Reset level 3-1 / 3-2 descent state
   descentMode = false;
   descentReached = false;
+  altarSequence = 'none';
+  altarSeqTimer = 0;
   // Always reset summit-jump state so the player isn't left invisible when
   // transitioning out of 2-3 into 3-1 via the summit jump.
   summitReached = false;
@@ -3314,7 +3606,7 @@ function startGame() {
   summitJumpPastApex = false;
   summitApexPlayerY = 0;
   summitPostApexFrames = 0;
-  if (level === 7) {
+  if (level === 7 || level === 8) {
     descentMode = true;
     // Spawn the player standing on the start platform
     const startLedge = descentLedges.find(l => l.isStart);
@@ -3616,10 +3908,12 @@ function update() {
 
   const levelComplete = verticalMode
     ? (summitReached && summitWaitingForInput && summitConfirmed)
+    : (level === 8)
+    ? (altarSequence === 'done')
     : (levelTimer >= levelDuration);
   if (levelComplete) {
     if (!konamiUsed) score += level * 1000;
-    if (level >= 7) {
+    if (level >= 8) {
       // Stop all gameplay audio
       stopAllLevelMusic();
       stopSiren();
@@ -4044,9 +4338,72 @@ function update() {
     if (player.x < 20) player.x = 20;
     if (player.x > W - player.w - 20) player.x = W - player.w - 20;
 
+    // Tick fragments on collapsed crumbling platforms (gravity + drift)
+    for (const ledge of descentLedges) {
+      if (!ledge.fragments || ledge.fragments.length === 0) continue;
+      for (let i = ledge.fragments.length - 1; i >= 0; i--) {
+        const f = ledge.fragments[i];
+        f.vy += 0.45; // gravity
+        f.x += f.vx;
+        f.y += f.vy;
+        f.rot += f.rotV;
+        f.life--;
+        if (f.y > H + 60 || f.life <= 0) {
+          ledge.fragments.splice(i, 1);
+        }
+      }
+    }
+
     // Ledge landing collision
     let onLedge = false;
     for (const ledge of descentLedges) {
+      if (ledge.collapsed) continue;
+      // Crumbling platforms: tick the collapse timer once touched
+      if (ledge.crumbles && ledge.touched) {
+        ledge.collapseTimer = (ledge.collapseTimer || 0) + 1;
+        // Escalating grinding warning sound as the timer ticks down
+        if (ledge.collapseTimer === 1) playRockCrumble(0.5);
+        else if (ledge.collapseTimer === 25) playRockCrumble(0.7);
+        else if (ledge.collapseTimer === 50) playRockCrumble(0.9);
+        else if (ledge.collapseTimer === 75) playRockCrumble(1.1);
+        if (ledge.collapseTimer >= CRUMBLE_TELEGRAPH) {
+          ledge.collapsed = true;
+          playRockCrumble(1.4);
+          // Break the platform into chunks that fall away
+          const chunkCount = Math.max(4, Math.floor(ledge.w / 14));
+          ledge.fragments = [];
+          for (let i = 0; i < chunkCount; i++) {
+            const cw = ledge.w / chunkCount;
+            ledge.fragments.push({
+              x: ledge.worldX + i * cw + cw / 2,
+              y: descentScreenY(ledge.worldY) + ledge.h / 2,
+              w: cw - 1,
+              h: ledge.h + 2,
+              vx: (Math.random() - 0.5) * 3 + ((i / chunkCount) - 0.5) * 2,
+              vy: -1 - Math.random() * 2,
+              rot: 0,
+              rotV: (Math.random() - 0.5) * 0.18,
+              life: 80,
+              seed: ledge.seed + i * 31
+            });
+          }
+          // Dust burst
+          const dsy = descentScreenY(ledge.worldY);
+          for (let p = 0; p < 14; p++) {
+            particles.push({
+              x: ledge.worldX + Math.random() * ledge.w,
+              y: dsy + Math.random() * ledge.h,
+              vx: (Math.random() - 0.5) * 3,
+              vy: Math.random() * 3 - 1,
+              life: 40 + Math.random() * 20,
+              maxLife: 60,
+              color: Math.random() < 0.5 ? '#3a2418' : '#5a3224',
+              size: 2 + Math.random() * 2
+            });
+          }
+          continue;
+        }
+      }
       const ly = descentScreenY(ledge.worldY);
       if (
         player.vy >= 0 &&
@@ -4061,18 +4418,53 @@ function update() {
         player.jumping = false;
         player.doubleJumped = false;
         onLedge = true;
+        if (ledge.crumbles && !ledge.touched) {
+          ledge.touched = true;
+          ledge.collapseTimer = 0;
+        }
         if (ledge.isFloor) descentReached = true;
+        // Level 3-2: standing in the center of the altar platform triggers the
+        // emerald-placement sequence
+        if (ledge.isAltar && altarSequence === 'none') {
+          const playerCx = player.x + player.w / 2;
+          const altarCx = ledge.worldX + ledge.w / 2;
+          if (Math.abs(playerCx - altarCx) < 60) {
+            altarSequence = 'ready';
+            altarSeqTimer = 0;
+          }
+        }
       }
     }
     if (!onLedge && player.vy !== 0) player.grounded = false;
+
+    // Altar sequence state machine
+    if (altarSequence !== 'none') {
+      altarSeqTimer++;
+      if (altarSequence === 'ready' && altarSeqTimer > 30) {
+        altarSequence = 'placing';
+        altarSeqTimer = 0;
+      } else if (altarSequence === 'placing' && altarSeqTimer > 120) {
+        // Emerald has reached the dragon's mouth — chime + start the roar
+        playEmeraldPlace();
+        setTimeout(() => { try { playDragonRoar(); } catch(e){} }, 300);
+        altarSequence = 'glow';
+        altarSeqTimer = 0;
+      } else if (altarSequence === 'glow' && altarSeqTimer > 180) {
+        altarSequence = 'done';
+        altarSeqTimer = 0;
+      }
+    }
 
     // ── LAVA SPOUTS — arcing projectile flares (45° launch + gravity) ──
     const SPOUT_LAUNCH_SPEED = 6;
     const SPOUT_GRAVITY = 0.14;
     const levelProg = levelTimer / levelDuration;
     for (const spout of lavaSpouts) {
-      // Skip until this spout is scheduled to activate
-      if (spout.activeAfter > 0 && levelProg < spout.activeAfter) continue;
+      // Altar geysers (activeAfter === -1) only activate once the altar
+      // sequence is running.
+      if (spout.activeAfter === -1) {
+        if (altarSequence === 'none') continue;
+      } else if (spout.activeAfter > 0 && levelProg < spout.activeAfter) continue;
       spout.phase++;
       const cyclePos = spout.phase % spout.period;
       // Audibility gate — only play SFX when the spout is near enough to hear
@@ -4083,6 +4475,26 @@ function update() {
       const firing = cyclePos >= spout.telegraphFrames && cyclePos < spout.telegraphFrames + spout.onFrames;
       if (!firing) continue;
       if (player.invincible > 0) continue;
+
+      // Vertical geyser variant (altar) — straight-up lava column
+      if (spout.vertical) {
+        const gx = spout.worldX;
+        const gy0 = descentScreenY(spout.worldY);
+        const flareVT = cyclePos - spout.telegraphFrames;
+        const GEYSER_SPEED = 9;
+        const headY = gy0 - flareVT * GEYSER_SPEED;
+        // Hurtbox: narrow vertical column from headY to gy0
+        const colHalf = 14;
+        if (player.x + player.w > gx - colHalf && player.x < gx + colHalf) {
+          const pyC = player.y + player.h / 2;
+          if (pyC > headY - 10 && pyC < gy0 + 10) {
+            die();
+            return;
+          }
+        }
+        continue;
+      }
+
       const originX = spout.dir === 1 ? 60 : W - 60;
       const originY = descentScreenY(spout.worldY);
       const flareT = cyclePos - spout.telegraphFrames;
@@ -4093,10 +4505,9 @@ function update() {
       // (samples inside the rock are hidden and should not hurt the player).
       const px = player.x + player.w / 2;
       const py = player.y + player.h / 2;
-      // Tighter alpha gate: only samples with alpha > ~0.3 count.
-      // alpha = 1 - age * 1.2 > 0.3  →  age < 0.58
-      const minT = Math.max(0, flareT - spout.onFrames * 0.58);
-      // Exclude the wall zones entirely — the walls are ~80 px thick on each side
+      // Only the brightest part of the trail (age < 0.35) counts for collision.
+      const minT = Math.max(0, flareT - spout.onFrames * 0.35);
+      // Exclude the wall zones entirely
       const WALL_CLEAR = 100;
       let hitBySpout = false;
       for (let t = minT; t <= flareT; t += 2) {
@@ -4105,7 +4516,7 @@ function update() {
         if (fx < WALL_CLEAR || fx > W - WALL_CLEAR) continue;
         if (fy < 0 || fy > H) continue;
         const isHead = (flareT - t) < 4;
-        const r = isHead ? 22 : 14;
+        const r = isHead ? 14 : 9;
         const dx2 = fx - px;
         const dy2 = fy - py;
         if (dx2 * dx2 + dy2 * dy2 < r * r) {
@@ -7701,7 +8112,7 @@ function drawHUD() {
   ctx.font = `bold 7px ${GAME_FONT}`;
   ctx.textAlign = 'left';
   const hudLevel = !isVolcanoLevel() ? `LEVEL 1-${level}` : `LEVEL ${Math.ceil(level/3)}-${((level-1)%3)+1}`;
-  const hudLocation = !isVolcanoLevel() ? 'NEO TOKYO' : level === 7 ? 'INTO THE FIRE' : level === 6 ? 'THE SUMMIT' : 'THE VOLCANO';
+  const hudLocation = !isVolcanoLevel() ? 'NEO TOKYO' : level === 8 ? 'DRAGON ALTAR' : level === 7 ? 'INTO THE FIRE' : level === 6 ? 'THE SUMMIT' : 'THE VOLCANO';
   ctx.fillText(`${hudLevel} — ${hudLocation}`, 20, 38);
 
   // Score
@@ -8838,7 +9249,7 @@ function drawTransition() {
   // Location name
   ctx.fillStyle = '#ffcc88';
   ctx.font = `12px ${GAME_FONT}`;
-  const locationName = !isVolcanoLevel() ? 'NEO TOKYO' : level === 7 ? 'INTO THE FIRE' : level === 6 ? 'THE SUMMIT' : 'THE VOLCANO';
+  const locationName = !isVolcanoLevel() ? 'NEO TOKYO' : level === 8 ? 'DRAGON ALTAR' : level === 7 ? 'INTO THE FIRE' : level === 6 ? 'THE SUMMIT' : 'THE VOLCANO';
   ctx.fillText(locationName, W / 2, H / 2 + 20);
 
   ctx.globalAlpha = 1;
@@ -9845,12 +10256,57 @@ function draw() {
       // ── LAVA SPOUTS — pulsing wall vents that fire angled flares ──
       const renderLevelProg = levelTimer / levelDuration;
       for (const spout of lavaSpouts) {
-        if (spout.activeAfter > 0 && renderLevelProg < spout.activeAfter) continue;
+        if (spout.activeAfter === -1) {
+          if (altarSequence === 'none') continue;
+        } else if (spout.activeAfter > 0 && renderLevelProg < spout.activeAfter) continue;
         const sy = descentScreenY(spout.worldY);
         if (sy < -80 || sy > H + 80) continue;
         const cyclePos = spout.phase % spout.period;
         const telegraph = cyclePos < spout.telegraphFrames;
         const firing = cyclePos >= spout.telegraphFrames && cyclePos < spout.telegraphFrames + spout.onFrames;
+
+        // ── VERTICAL GEYSER (altar) — straight up lava column ──
+        if (spout.vertical) {
+          const gx = spout.worldX;
+          if (telegraph) {
+            const t = cyclePos / spout.telegraphFrames;
+            const pulse = 0.4 + Math.sin(t * Math.PI * 5) * 0.3 + t * 0.3;
+            ctx.globalAlpha = pulse;
+            ctx.fillStyle = WPAL.lava;
+            ctx.fillRect(gx - P * 3, sy - P * 2, P * 6, P * 3);
+            ctx.fillStyle = WPAL.lavaH;
+            ctx.fillRect(gx - P, sy - P, P * 2, P * 2);
+            ctx.globalAlpha = 1;
+          } else if (firing) {
+            const flareVT = cyclePos - spout.telegraphFrames;
+            const GEYSER_SPEED = 9;
+            const headY = sy - flareVT * GEYSER_SPEED;
+            // Column of lava from sy up to headY
+            for (let cy = sy; cy > headY - 10; cy -= P) {
+              if (cy < -40) break;
+              const ageFrac = (sy - cy) / Math.max(1, (sy - headY));
+              const alpha = 0.9 - ageFrac * 0.3;
+              ctx.globalAlpha = alpha;
+              // Outer halo
+              ctx.fillStyle = WPAL.lavaD;
+              ctx.fillRect(gx - P * 3, cy, P * 7, P);
+              // Mid
+              ctx.fillStyle = WPAL.lava;
+              ctx.fillRect(gx - P * 2, cy, P * 5, P);
+              // Core
+              ctx.fillStyle = WPAL.lavaH;
+              ctx.fillRect(gx - P, cy, P * 3, P);
+              ctx.fillStyle = '#fff0aa';
+              ctx.fillRect(gx, cy, P, P);
+            }
+            ctx.globalAlpha = 1;
+            // Bright base
+            ctx.fillStyle = WPAL.lavaH;
+            ctx.fillRect(gx - P * 3, sy - P, P * 7, P * 3);
+          }
+          continue; // skip the angled spout render path
+        }
+
         const originX = spout.dir === 1 ? 60 : W - 60;
 
         // ── CONSTANT DRIP — lava falls down the wall from the vent to the floor ──
@@ -9955,9 +10411,18 @@ function draw() {
 
       // ── PLATFORMS — rock outcroppings in the 2-3 style ──
       for (const ledge of descentLedges) {
-        const sy = descentScreenY(ledge.worldY);
-        if (sy < -60 || sy > H + 40) continue;
-        const sx = ledge.worldX;
+        if (ledge.collapsed) continue;
+        const baseSy = descentScreenY(ledge.worldY);
+        if (baseSy < -60 || baseSy > H + 40) continue;
+        // Crumbling platforms shake as they telegraph their collapse
+        let shakeX = 0, shakeY = 0;
+        if (ledge.crumbles && ledge.touched) {
+          const intensity = (ledge.collapseTimer || 0) / CRUMBLE_TELEGRAPH;
+          shakeX = (Math.random() - 0.5) * intensity * 6;
+          shakeY = (Math.random() - 0.5) * intensity * 3;
+        }
+        const sy = baseSy + shakeY;
+        const sx = ledge.worldX + shakeX;
         const seed = ledge.seed;
         const cols = Math.ceil(ledge.w / P);
         const baseRows = Math.ceil(ledge.h / P);
@@ -10008,6 +10473,125 @@ function draw() {
           const shadowLen = 2 + (sh % 3);
           for (let s = 0; s < shadowLen; s++) {
             ctx.fillRect(sx + col * P, sy + ledge.h + s * P, P, P);
+          }
+        }
+      }
+
+      // ── FALLING FRAGMENTS from crumbled platforms ──
+      for (const ledge of descentLedges) {
+        if (!ledge.fragments || ledge.fragments.length === 0) continue;
+        for (const f of ledge.fragments) {
+          if (f.y < -40 || f.y > H + 40) continue;
+          const lifeFrac = Math.max(0, f.life / 80);
+          ctx.globalAlpha = lifeFrac;
+          ctx.save();
+          ctx.translate(f.x, f.y);
+          ctx.rotate(f.rot);
+          // Chunk body — cliff palette
+          ctx.fillStyle = (f.seed & 1) ? WPAL.surface : WPAL.mid;
+          ctx.fillRect(-f.w / 2, -f.h / 2, f.w, f.h);
+          ctx.fillStyle = WPAL.light;
+          ctx.fillRect(-f.w / 2, -f.h / 2, f.w, P);
+          ctx.fillStyle = WPAL.dark;
+          ctx.fillRect(-f.w / 2, f.h / 2 - P, f.w, P);
+          ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // ── DRAGON ALTAR (level 3-2) — stone dragon image carved on the back wall ──
+      if (level === 8) {
+        const altar = descentLedges.find(l => l.isAltar);
+        if (altar && stoneDragonReady) {
+          const ax = altar.worldX + altar.w / 2;
+          const aly = descentScreenY(altar.worldY);
+          // Scale the image to a reasonable size, preserving aspect ratio
+          const targetW = Math.min(260, altar.w * 0.75);
+          const aspect = stoneDragonImg.width / stoneDragonImg.height;
+          const drawW = targetW;
+          const drawH = drawW / aspect;
+          const dx = ax - drawW / 2;
+          const dy = aly - drawH - 4; // sit just above the platform
+
+          // Drop shadow on platform
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          ctx.fillRect(ax - drawW / 2, aly - 4, drawW, 8);
+
+          // Pulsing organic green aura during the glow phase
+          if (altarSequence === 'glow' || altarSequence === 'done') {
+            const pulse = 0.5 + Math.sin(frameCount * 0.12) * 0.3;
+            const auraCx = ax;
+            const auraCy = dy + drawH / 2;
+            // Soft radial falloff — main aura
+            const aR = drawW * 0.75 + Math.sin(frameCount * 0.08) * 12;
+            const radial = ctx.createRadialGradient(auraCx, auraCy, 10, auraCx, auraCy, aR);
+            radial.addColorStop(0, `rgba(120, 255, 150, ${pulse * 0.55})`);
+            radial.addColorStop(0.45, `rgba(60, 230, 110, ${pulse * 0.35})`);
+            radial.addColorStop(1, 'rgba(30, 160, 60, 0)');
+            ctx.fillStyle = radial;
+            ctx.beginPath();
+            ctx.ellipse(auraCx, auraCy, aR, aR * 0.85, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Irregular pulsing blobs around the edges — each with its own phase
+            const blobs = 6;
+            for (let b = 0; b < blobs; b++) {
+              const angle = (b / blobs) * Math.PI * 2 + frameCount * 0.01;
+              const radius = drawW * 0.5 + Math.sin(frameCount * 0.09 + b * 1.7) * 14;
+              const bx = auraCx + Math.cos(angle) * radius;
+              const by = auraCy + Math.sin(angle) * radius * 0.82;
+              const br = 26 + Math.sin(frameCount * 0.11 + b * 2.3) * 8;
+              const blobGrad = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+              blobGrad.addColorStop(0, `rgba(140, 255, 160, ${pulse * 0.55})`);
+              blobGrad.addColorStop(1, 'rgba(40, 180, 80, 0)');
+              ctx.fillStyle = blobGrad;
+              ctx.beginPath();
+              ctx.arc(bx, by, br, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+
+          // The stone dragon sculpture itself
+          ctx.drawImage(stoneDragonImg, dx, dy, drawW, drawH);
+
+          // Green glow overlay on the dragon when the altar is activating
+          if (altarSequence === 'glow' || altarSequence === 'done') {
+            const pulse = 0.4 + Math.sin(frameCount * 0.18) * 0.25;
+            ctx.globalAlpha = pulse;
+            ctx.globalCompositeOperation = 'screen';
+            ctx.fillStyle = '#22ff66';
+            ctx.fillRect(dx, dy, drawW, drawH);
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = 1;
+          }
+
+          // ── Emerald — starts in player, floats to the dragon's mouth during 'placing' ──
+          if (altarSequence === 'placing' || altarSequence === 'ready') {
+            const startX = player.x + player.w / 2;
+            const startY = player.y + player.h / 2;
+            // Aim for roughly the middle of the dragon image (approx. mouth position)
+            const targetX = ax;
+            const targetY = dy + drawH * 0.55;
+            let t = 0;
+            if (altarSequence === 'placing') {
+              t = Math.min(1, altarSeqTimer / 120);
+              t = t * t * (3 - 2 * t); // ease in-out
+            }
+            const ex = startX + (targetX - startX) * t;
+            const ey = startY + (targetY - startY) * t - Math.sin(t * Math.PI) * 40; // arc
+            // Emerald glow
+            const emPulse = 0.6 + Math.sin(frameCount * 0.2) * 0.3;
+            ctx.globalAlpha = emPulse;
+            ctx.fillStyle = '#44ff88';
+            ctx.fillRect(ex - 10, ey - 10, 20, 20);
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#22dd66';
+            ctx.fillRect(ex - 7, ey - 7, 14, 14);
+            ctx.fillStyle = '#aaffbb';
+            ctx.fillRect(ex - 4, ey - 4, 8, 8);
+            // Trailing sparkle particles
+            if (altarSequence === 'placing' && frameCount % 3 === 0) {
+              spawnParticles(ex, ey, '#88ffaa', 2, 2);
+            }
           }
         }
       }
