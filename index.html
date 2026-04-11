@@ -8680,17 +8680,26 @@ function draw() {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (isVolcanoLevel()) {
       if (level === 6 && volcanoBg23Ready) {
-        // Level 2-3: use the volcano-bg-2-3 image for the whole level (zoomed in 25%)
+        // Level 2-3: cover-scale the background so it fills the canvas at any viewport
         const imgAspect = volcanoBg23.width / volcanoBg23.height;
-        const zoom = 1.25;
-        const drawW = W * zoom;
-        const drawH = drawW / imgAspect;
-        // Slow parallax shift based on horizontal scroll
+        const canvasAspect = W / H;
+        let drawW, drawH;
+        if (canvasAspect > imgAspect) {
+          drawW = W;
+          drawH = W / imgAspect;
+        } else {
+          drawH = H;
+          drawW = H * imgAspect;
+        }
+        // Extra headroom so parallax drift can never reveal an edge
+        drawW *= 1.1;
+        drawH *= 1.1;
         const maxShift = Math.max(1, (drawW - W) / 2);
         const rawShift = (scrollOffset * 0.008) % (maxShift * 2);
         const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
         const drawX = (W - drawW) / 2 + shiftX;
-        ctx.drawImage(volcanoBg23, drawX, (H - drawH) / 2, drawW, drawH);
+        const drawY = (H - drawH) / 2;
+        ctx.drawImage(volcanoBg23, drawX, drawY, drawW, drawH);
       } else {
         drawDestroyedCitySky();
       }
@@ -8728,7 +8737,6 @@ function draw() {
 
       // ── 1. SKY + CITY BACKGROUND — using volcano-bg-2-3 image ──
       // Background is clipped to only show below the volcano lip
-      const climbProgress = Math.min(1, Math.abs(scrollOffsetY) / CLIMB_TOTAL_HEIGHT);
       const lipScreenYForBg = climbScreenY(-CLIMB_TOTAL_HEIGHT);
       // The bg image should only be visible below the lip
       const bgClipTop = Math.max(0, Math.floor(lipScreenYForBg));
@@ -8740,12 +8748,20 @@ function draw() {
         ctx.rect(0, bgClipTop, W, H - bgClipTop);
         ctx.clip();
         const imgAspect = volcanoBg23.width / volcanoBg23.height;
-        const zoom = 1.25;
-        const drawW = W * zoom;
-        const drawH = drawW / imgAspect;
+        const canvasAspect = W / H;
+        let drawW, drawH;
+        if (canvasAspect > imgAspect) {
+          drawW = W;
+          drawH = W / imgAspect;
+        } else {
+          drawH = H;
+          drawW = H * imgAspect;
+        }
+        drawW *= 1.1;
+        drawH *= 1.1;
         const drawX = (W - drawW) / 2;
-        const bgShift = climbProgress * H * 0.5;
-        ctx.drawImage(volcanoBg23, drawX, bgShift, drawW, drawH);
+        const drawY = (H - drawH) / 2;
+        ctx.drawImage(volcanoBg23, drawX, drawY, drawW, drawH);
         ctx.restore();
       } else {
         const skyGrad = ctx.createLinearGradient(0, bgClipTop, 0, H);
