@@ -3752,8 +3752,6 @@ function update() {
       }
     }
 
-    // Update climb birds (fly across, knockback only)
-    updateClimbBirds();
   } else {
     const playerGroundY = getGroundY(player.x + scrollOffset);
     if (player.y + player.h >= playerGroundY) {
@@ -3764,6 +3762,9 @@ function update() {
       player.doubleJumped = false;
     }
   }
+
+  // Birds / eagles — active on all volcano levels (fly across, knockback only)
+  updateClimbBirds();
 
   // Run animation
   if (player.grounded && (moveX !== 0 || true)) {
@@ -4691,20 +4692,60 @@ function updateDojoBirds() {
 }
 
 function updateClimbBirds() {
-  if (!verticalMode) { climbBirds = []; return; }
+  // Only active in volcano levels. Level 6 pre-vertical and non-volcano levels clear.
+  if (!isVolcanoLevel() || (level === 6 && !verticalMode)) {
+    climbBirds = [];
+    return;
+  }
 
-  // Spawn rate: ~every 90-140 frames, gets slightly denser higher up
-  const climbProg = Math.min(1, Math.abs(scrollOffsetY) / CLIMB_TOTAL_HEIGHT);
-  // No new birds in the final 1/3 of the climb — but let existing ones finish
-  const spawnRate = Math.max(60, Math.floor(120 - climbProg * 50));
-  if (climbProg <= 0.67 && frameCount % spawnRate === 0) {
-    const birdScreenY = 40 + Math.random() * (H * 0.7);
-    const fromLeft = Math.random() < 0.5;
-    // Eagles: ~40% base chance, up to ~70% higher up
-    const eagle = Math.random() < 0.4 + climbProg * 0.3;
+  // Per-level spawn parameters
+  let canSpawn = false;
+  let spawnRate = 120;
+  let spawnYMin = 40;
+  let spawnYMax = 40;
+  let eagleChance = 0;
+  let forceFromRight = false;
+  let speedBaseBird = 2.5;
+  let speedRangeBird = 2.5;
+  let speedBaseEagle = 1.8;
+  let speedRangeEagle = 1.5;
+  let speedProgBonus = 0;
+
+  if (verticalMode) {
+    // Level 2-3 vertical climb: birds + eagles, denser higher up, fade out in final third
+    const climbProg = Math.min(1, Math.abs(scrollOffsetY) / CLIMB_TOTAL_HEIGHT);
+    canSpawn = climbProg <= 0.67;
+    spawnRate = Math.max(60, Math.floor(120 - climbProg * 50));
+    spawnYMin = 40;
+    spawnYMax = 40 + H * 0.7;
+    eagleChance = 0.4 + climbProg * 0.3;
+    speedProgBonus = climbProg;
+  } else if (level === 4) {
+    // Level 2-1: birds only, from the right, band between 40% and 60% of screen height
+    canSpawn = true;
+    spawnRate = 180;
+    spawnYMin = H * 0.4;
+    spawnYMax = H * 0.6;
+    eagleChance = 0;
+    forceFromRight = true;
+  } else if (level === 5) {
+    // Level 2-2: birds + eagles from the right, top half of screen
+    canSpawn = true;
+    spawnRate = 160;
+    spawnYMin = 40;
+    spawnYMax = H / 2 - 20;
+    eagleChance = 0.35;
+    forceFromRight = true;
+  }
+
+  // Probabilistic spawn — average one every spawnRate frames with random variance
+  if (canSpawn && Math.random() < 1 / spawnRate) {
+    const birdScreenY = spawnYMin + Math.random() * Math.max(1, spawnYMax - spawnYMin);
+    const fromLeft = forceFromRight ? false : (Math.random() < 0.5);
+    const eagle = Math.random() < eagleChance;
     const speed = eagle
-      ? 1.8 + Math.random() * 1.5 + climbProg * 1.0  // eagles are slower but menacing
-      : 2.5 + Math.random() * 2.5 + climbProg * 1.5;
+      ? speedBaseEagle + Math.random() * speedRangeEagle + speedProgBonus * 1.0
+      : speedBaseBird + Math.random() * speedRangeBird + speedProgBonus * 1.5;
     climbBirds.push({
       x: fromLeft ? (eagle ? -60 : -30) : (eagle ? W + 60 : W + 30),
       y: birdScreenY,
@@ -4729,9 +4770,8 @@ function updateClimbBirds() {
     // Up/down soaring motion — eagles have bigger, slower swoops
     if (b.baseY === undefined) { b.baseY = b.y; b.bobPhase = 0; }
     if (b.isEagle) {
-      // Eagle attack behavior: dive toward player when in range
-      if (b.attackState === undefined) b.attackState = 'approach'; // approach → dive → pullup → glide
-      if (b.attackState === 'pullup') b.pullupTimer = (b.pullupTimer || 0);
+      // Eagle attack behavior: dive toward player, fly through, continue out
+      if (b.attackState === undefined) b.attackState = 'approach'; // approach → dive → exit
 
       const distToPlayer = Math.abs(b.x + b.w / 2 - (player.x + player.w / 2));
       const playerCenterY = player.y + player.h / 2;
@@ -4739,37 +4779,30 @@ function updateClimbBirds() {
       if (b.attackState === 'approach') {
         // Soar at baseY until horizontally close to player
         b.y = b.baseY + Math.sin(b.timer * 0.035 + b.bobPhase) * 12;
-        if (distToPlayer < W * 0.45) {
+        if (distToPlayer < W * 0.25) {
           b.attackState = 'dive';
+          b.diveStartX = b.x;
           b.diveStartY = b.y;
+          b.diveTargetX = player.x + player.w / 2 - b.w / 2;
           b.diveTargetY = playerCenterY - 5; // aim slightly above player center
           b.diveProgress = 0;
         }
       } else if (b.attackState === 'dive') {
-        // Swoop down toward the player's Y position
+        // Swoop toward the player's position in both X and Y
         b.diveProgress += 0.04;
         const t = Math.min(1, b.diveProgress);
         const ease = t * t * (3 - 2 * t); // smooth ease in-out
         b.y = b.diveStartY + (b.diveTargetY - b.diveStartY) * ease;
-        // Speed up during dive
-        b.x += b.vx * 0.3;
+        b.x = b.diveStartX + (b.diveTargetX - b.diveStartX) * ease;
         if (t >= 1) {
-          b.attackState = 'pullup';
-          b.pullupTimer = 0;
-          b.pullupStartY = b.y;
-        }
-      } else if (b.attackState === 'pullup') {
-        // Pull back up after dive
-        b.pullupTimer++;
-        const pullT = Math.min(1, b.pullupTimer / 40);
-        const pullEase = pullT * pullT;
-        b.y = b.pullupStartY + (b.baseY - b.pullupStartY) * pullEase;
-        if (pullT >= 1) {
-          b.attackState = 'glide'; // done attacking, just glide out
+          // Fly through the player and keep going in the dive direction
+          b.attackState = 'exit';
+          b.baseY = b.y;
+          b.vx *= 1.5;
         }
       } else {
-        // glide: gentle bob while exiting
-        b.y = b.baseY + Math.sin(b.timer * 0.035 + b.bobPhase) * 8;
+        // exit: keep flying out at the player's level with a gentle bob
+        b.y = b.baseY + Math.sin(b.timer * 0.05 + b.bobPhase) * 4;
       }
     } else {
       b.y = b.baseY + Math.sin(b.timer * 0.07 + b.bobPhase) * 3;
@@ -4779,26 +4812,26 @@ function updateClimbBirds() {
       climbBirds.splice(i, 1);
       continue;
     }
-    // Collision — knockback, no kill. Eagles hit much harder.
-    if (player.invincible <= 0 &&
+    // Collision — knockback, no kill, NO invincibility grant. Eagles hit much harder.
+    // Each bird can only hit the player once (per-bird flag, not global invincibility).
+    if (!b.hasHit &&
         b.x < player.x + player.w &&
         b.x + b.w > player.x &&
         b.y < player.y + player.h &&
         b.y + b.h > player.y) {
       const knockForce = b.isEagle ? 80 : 6;  // eagles send you FLYING sideways
       const knockUp = b.isEagle ? -6 : -7;   // eagles: huge horizontal + upward pop
-      const invFrames = b.isEagle ? 60 : 40;
       player.x += b.dir * knockForce;
       player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
       player.vy = knockUp;
       player.grounded = false;
-      player.invincible = invFrames;
       player.knockbackTimer = 20;
       playRockHit();
       const pColor = b.isEagle ? '#ffddaa' : '#aabbcc';
       const pCount = b.isEagle ? 12 : 6;
       spawnParticles(player.x + player.w / 2, player.y + player.h / 2, pColor, pCount, b.isEagle ? 5 : 3);
       b.vx *= 1.8;
+      b.hasHit = true;
     }
   }
 }
@@ -9233,6 +9266,11 @@ function draw() {
         const sx = t.worldX - scrollOffset;
         if (sx < -200 || sx > W + 200) continue;
         drawSingleTree(t);
+      }
+
+      // ── BIRDS / EAGLES (horizontal volcano levels 2-1, 2-2) ──
+      if (!verticalMode && (level === 4 || level === 5)) {
+        drawClimbBirds();
       }
     } else {
       drawStreetLamps();
