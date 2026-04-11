@@ -8886,9 +8886,9 @@ function drawDemonCutscene() {
     }
     ctx.globalAlpha = 1;
 
-    // Screen shake intensifies as the demon rises
+    // Subtle screen shake as the demon rises (toned down)
     if (typeof shakeTimer !== 'undefined') {
-      const targetShake = 2 + eased * 12;
+      const targetShake = 1 + eased * 4;
       shakeTimer = Math.max(shakeTimer || 0, targetShake);
     }
 
@@ -8905,14 +8905,17 @@ function drawDemonCutscene() {
     ctx.imageSmoothingEnabled = true;
   }
 
-  // Stone dragon silhouette in the foreground (smaller, lower-center)
+  // Stone dragon silhouette in the foreground — slowly descends across the cutscene
   if (stoneDragonReady) {
     const targetW = 240;
     const aspect = stoneDragonImg.width / stoneDragonImg.height;
     const drawW = targetW;
     const drawH = drawW / aspect;
     const dx = W / 2 - drawW / 2;
-    const dy = H + 40 - drawH;
+    // Starts at the original resting position; drifts down ~140 px by the end
+    const descendT = Math.min(1, demonCutsceneTimer / DEMON_CUTSCENE_LEN);
+    const dyBase = H + 40 - drawH;
+    const dy = dyBase + descendT * 140;
     // Render as silhouette
     const off = document.createElement('canvas');
     const pad = 16;
