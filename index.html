@@ -90,6 +90,13 @@ let altarSequence = 'none';       // 'none' | 'ready' | 'placing' | 'glow' | 'do
 let altarSeqTimer = 0;            // frames elapsed in the current altar phase
 const CRUMBLE_TELEGRAPH = 95;     // frames from first touch to full collapse (~1.5s)
 
+// Volcanic demon cutscene state (post-3-2)
+let demonCutsceneTimer = 0;
+let demonCutsceneRumbleScheduled = false;
+let demonCutsceneRoarScheduled = false;
+let demonCutsceneDone = false;
+const DEMON_CUTSCENE_LEN = 680;   // ~11 seconds at 60fps (rise + line1 + gap + line2)
+
 // Climb birds — fly across screen during vertical climb, knockback but don't kill
 let climbBirds = [];  // { x, y, vx, frame, timer, w, h, dir }
 
@@ -214,6 +221,11 @@ const stoneDragonImg = new Image();
 stoneDragonImg.src = 'assets/stone-dragon.png';
 let stoneDragonReady = false;
 stoneDragonImg.onload = function() { stoneDragonReady = true; };
+
+const volcanicDemonImg = new Image();
+volcanicDemonImg.src = 'assets/volcanic-demon.png';
+let volcanicDemonReady = false;
+volcanicDemonImg.onload = function() { volcanicDemonReady = true; };
 
 const moltenRockImg = new Image();
 moltenRockImg.src = 'assets/molten-rock.png';
@@ -3263,6 +3275,16 @@ window.addEventListener('keydown', e => {
       emeraldCutsceneMusic.currentTime = 0;
       gameState = 'levelComplete';
       startGame();
+    } else if (gameState === 'demonCutscene' && demonCutsceneDone) {
+      // Advance from the demon cutscene → final victory (placeholder until 3-3)
+      const lifeBonus = konamiUsed ? 0 : (lives >= MAX_LIVES ? 10000 : lives * 1000);
+      if (!konamiUsed) score += lifeBonus;
+      gameState = 'victory';
+      storyScrollY = 0;
+      storyScrollDone = false;
+      deathTimer = 0;
+      victoryMusic.currentTime = 0;
+      victoryMusic.play().catch(() => {});
     } else if (gameState === 'playing' && summitWaitingForInput && !summitJumping && !summitConfirmed) {
       // Jump HIGH into the volcano — jump straight up from current position
       // Player draws in FRONT of the mountain on the way up, then BEHIND once past the peak
@@ -3913,6 +3935,20 @@ function update() {
     : (levelTimer >= levelDuration);
   if (levelComplete) {
     if (!konamiUsed) score += level * 1000;
+    if (level === 8) {
+      // End of 3-2 → demon-rise cutscene before the final victory
+      stopAllLevelMusic();
+      stopSiren();
+      stopPoliceSiren();
+      stopBusScream();
+      stopBuzz();
+      gameState = 'demonCutscene';
+      demonCutsceneTimer = 0;
+      demonCutsceneRumbleScheduled = false;
+      demonCutsceneRoarScheduled = false;
+      demonCutsceneDone = false;
+      return;
+    }
     if (level >= 8) {
       // Stop all gameplay audio
       stopAllLevelMusic();
@@ -4444,7 +4480,7 @@ function update() {
         altarSequence = 'placing';
         altarSeqTimer = 0;
       } else if (altarSequence === 'placing' && altarSeqTimer > 120) {
-        // Emerald has reached the dragon's mouth — chime + start the roar
+        // Emerald reaches the dragon's mouth — chime + start the roar
         playEmeraldPlace();
         setTimeout(() => { try { playDragonRoar(); } catch(e){} }, 300);
         altarSequence = 'glow';
@@ -8704,6 +8740,263 @@ function drawStoryScroll() {
   }
 }
 
+function drawDemonCutscene() {
+  const P = 4;
+  const WPAL = {
+    deep: '#0c0604', dark: '#160d08', mid: '#24160e',
+    surface: '#362010', light: '#4a2e1a', edge: '#5c3820',
+    shadow: '#080402', lavaD: '#882200', lava: '#cc4400', lavaH: '#ffaa22'
+  };
+
+  // Background — same cliff style as 3-2 walls
+  ctx.fillStyle = '#020001';
+  ctx.fillRect(0, 0, W, H);
+  // Back wall band texture
+  for (let y = 0; y < H; y += P) {
+    const worldRow = Math.floor(y / P);
+    const rawPhase = worldRow * 0.08;
+    const bandPhase = ((rawPhase % 1) + 1) % 1;
+    for (let x = 0; x < W; x += P) {
+      const h = ((x * 7919 + worldRow * 4813 + 31337) >>> 0) & 0xFFFF;
+      let color;
+      if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+      else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+      else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+      else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+      else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, P, P);
+    }
+  }
+  // Dim back wall + red tint
+  ctx.globalAlpha = 0.45;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = '#aa2200';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+
+  // Side cliff walls (same as 3-2)
+  const WALL_THICKNESS = 56;
+  for (let y = 0; y < H; y += P) {
+    const worldRow = Math.floor(y / P);
+    const absRow = Math.abs(worldRow);
+    const leftJag = ((absRow * 2654435761 >>> 16) % 5) * P + ((absRow * 1597463007 >>> 12) % 3) * P;
+    const rightJag = ((absRow * 3266489917 >>> 14) % 5) * P + ((absRow * 1099511628 >>> 18) % 3) * P;
+    const leftInner = WALL_THICKNESS + leftJag;
+    const rightInner = W - WALL_THICKNESS - rightJag;
+    for (let x = 0; x <= leftInner + P * 4; x += P) {
+      const h = ((x * 7919 + worldRow * 4813 + 31337) >>> 0) & 0xFFFF;
+      const edgeDist = leftInner - x;
+      if (edgeDist < 0) {
+        if (h % 3 === 0 && edgeDist > -P * 4) {
+          ctx.fillStyle = h % 5 === 0 ? WPAL.dark : WPAL.deep;
+          ctx.fillRect(x, y, P, P);
+        }
+        continue;
+      }
+      if (edgeDist < P * 4) {
+        if (edgeDist < P) ctx.fillStyle = WPAL.shadow;
+        else if (edgeDist < P * 2) ctx.fillStyle = h % 2 === 0 ? WPAL.deep : WPAL.shadow;
+        else ctx.fillStyle = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+        ctx.fillRect(x, y, P, P);
+        continue;
+      }
+      const rawPhase = (worldRow + x * 0.3) * 0.08;
+      const bandPhase = ((rawPhase % 1) + 1) % 1;
+      let color;
+      if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+      else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+      else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+      else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+      else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, P, P);
+    }
+    for (let x = rightInner - P * 4; x < W; x += P) {
+      const h = ((x * 7919 + worldRow * 4813 + 42139) >>> 0) & 0xFFFF;
+      const edgeDist = x - rightInner;
+      if (edgeDist < 0) {
+        if (h % 3 === 0 && edgeDist > -P * 4) {
+          ctx.fillStyle = h % 5 === 0 ? WPAL.dark : WPAL.deep;
+          ctx.fillRect(x, y, P, P);
+        }
+        continue;
+      }
+      if (edgeDist < P * 4) {
+        if (edgeDist < P) ctx.fillStyle = WPAL.shadow;
+        else if (edgeDist < P * 2) ctx.fillStyle = h % 2 === 0 ? WPAL.deep : WPAL.shadow;
+        else ctx.fillStyle = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+        ctx.fillRect(x, y, P, P);
+        continue;
+      }
+      const rawPhase = (worldRow + x * 0.3) * 0.08;
+      const bandPhase = ((rawPhase % 1) + 1) % 1;
+      let color;
+      if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+      else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+      else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+      else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+      else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, P, P);
+    }
+  }
+
+  // ── DEMON RISING (eased rise from below screen) ──
+  if (volcanicDemonReady) {
+    const RISE_END = 240; // frames
+    const riseT = Math.min(1, demonCutsceneTimer / RISE_END);
+    const eased = riseT * riseT * (3 - 2 * riseT);
+    const dW = 820;
+    const aspect = volcanicDemonImg.width / volcanicDemonImg.height;
+    const dH = dW / aspect;
+    const topY = H + 80 - eased * (H + 40);
+    const dx = W / 2 - dW / 2;
+
+    // Lava backlight
+    const glow = ctx.createRadialGradient(W / 2, topY + 220, 30, W / 2, topY + 220, 460);
+    glow.addColorStop(0, `rgba(255, 160, 50, ${0.85 * eased})`);
+    glow.addColorStop(0.35, `rgba(255, 90, 15, ${0.55 * eased})`);
+    glow.addColorStop(0.7, `rgba(180, 30, 0, ${0.3 * eased})`);
+    glow.addColorStop(1, 'rgba(40, 0, 0, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
+
+    // Heat-shimmer embers
+    for (let i = 0; i < 16; i++) {
+      const emberSeed = (i * 7919 + Math.floor(frameCount * 0.3) * 31) & 0xFFFF;
+      const ex = W / 2 - 300 + (emberSeed % 600);
+      const ey = topY + 60 + ((emberSeed * 13) & 0x1FF);
+      const ePh = (frameCount * 0.7 + i * 17) % 140;
+      const eyAnim = ey - ePh * 1.5;
+      if (eyAnim < 0 || eyAnim > H) continue;
+      const fade = Math.max(0, 1 - ePh / 140);
+      ctx.globalAlpha = fade * 0.7 * eased;
+      ctx.fillStyle = (i & 1) ? '#ffaa22' : '#ff6622';
+      ctx.fillRect(Math.floor(ex / P) * P, Math.floor(eyAnim / P) * P, P, P);
+    }
+    ctx.globalAlpha = 1;
+
+    // Screen shake intensifies as the demon rises
+    if (typeof shakeTimer !== 'undefined') {
+      const targetShake = 2 + eased * 12;
+      shakeTimer = Math.max(shakeTimer || 0, targetShake);
+    }
+
+    // Demon image
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(volcanicDemonImg, dx, topY, dW, dH);
+    ctx.imageSmoothingEnabled = true;
+  }
+
+  // Player silhouette in the foreground (off to the right, facing the demon)
+  if (typeof ninjaSprite !== 'undefined' && spriteReady) {
+    const pcx = W * 0.78;
+    const pby = H - 60;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(ninjaSprite, pcx - SPRITE_W / 2, pby - SPRITE_H, SPRITE_W, SPRITE_H);
+    ctx.imageSmoothingEnabled = true;
+  }
+
+  // Stone dragon silhouette in the foreground (smaller, lower-center)
+  if (stoneDragonReady) {
+    const targetW = 240;
+    const aspect = stoneDragonImg.width / stoneDragonImg.height;
+    const drawW = targetW;
+    const drawH = drawW / aspect;
+    const dx = W / 2 - drawW / 2;
+    const dy = H + 40 - drawH;
+    // Render as silhouette
+    const off = document.createElement('canvas');
+    const pad = 16;
+    off.width = Math.ceil(drawW) + pad * 2;
+    off.height = Math.ceil(drawH) + pad * 2;
+    const octx = off.getContext('2d');
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(stoneDragonImg, pad, pad, drawW, drawH);
+    octx.globalCompositeOperation = 'source-atop';
+    octx.fillStyle = '#000';
+    octx.fillRect(0, 0, off.width, off.height);
+    octx.globalCompositeOperation = 'source-over';
+    // Build green outline copy
+    const outline = document.createElement('canvas');
+    outline.width = off.width;
+    outline.height = off.height;
+    const outCtx = outline.getContext('2d');
+    outCtx.imageSmoothingEnabled = false;
+    outCtx.drawImage(stoneDragonImg, pad, pad, drawW, drawH);
+    outCtx.globalCompositeOperation = 'source-atop';
+    outCtx.fillStyle = '#44ff88';
+    outCtx.fillRect(0, 0, outline.width, outline.height);
+    outCtx.globalCompositeOperation = 'source-over';
+    const pulse = 0.6 + Math.sin(frameCount * 0.09) * 0.25;
+    ctx.globalAlpha = pulse;
+    const ringOffsets = [[-3, 0], [3, 0], [0, -3], [0, 3], [-2, -2], [2, -2], [-2, 2], [2, 2]];
+    for (const [ox, oy] of ringOffsets) {
+      ctx.drawImage(outline, dx - pad + ox, dy - pad + oy);
+    }
+    ctx.globalAlpha = 1;
+    ctx.drawImage(off, dx - pad, dy - pad);
+  }
+
+  // ── Narration — two lines that appear one at a time with fades ──
+  // Demon rise ends at ~frame 240. Each line fades in, holds, then fades out.
+  const LINE1_START = 260, LINE1_END = 440;
+  const LINE2_START = 460, LINE2_END = 640;
+  let narrText = '';
+  let narrColor = '';
+  let narrAlpha = 0;
+  if (demonCutsceneTimer >= LINE1_START && demonCutsceneTimer < LINE1_END) {
+    narrText = '"The emerald was never meant to be returned..."';
+    narrColor = '#ffcc88';
+    const t2 = demonCutsceneTimer - LINE1_START;
+    const dur = LINE1_END - LINE1_START;
+    narrAlpha = t2 < 25 ? t2 / 25 : (dur - t2) < 25 ? (dur - t2) / 25 : 1;
+  } else if (demonCutsceneTimer >= LINE2_START && demonCutsceneTimer < LINE2_END) {
+    narrText = '"You will pay for your actions, with your life!"';
+    narrColor = '#ff5522';
+    const t2 = demonCutsceneTimer - LINE2_START;
+    const dur = LINE2_END - LINE2_START;
+    narrAlpha = t2 < 25 ? t2 / 25 : (dur - t2) < 25 ? (dur - t2) / 25 : 1;
+  }
+  if (narrAlpha > 0) {
+    ctx.globalAlpha = narrAlpha;
+    const boxW = 720;
+    const boxH = 70;
+    const boxX = W / 2 - boxW / 2;
+    const boxY = H - 120;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = '#cc4400';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = 'rgba(255, 100, 30, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(boxX + 4, boxY + 4, boxW - 8, boxH - 8);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = narrColor;
+    ctx.font = `bold 18px ${GAME_FONT}`;
+    ctx.fillText(narrText, W / 2, boxY + 44);
+    ctx.textAlign = 'left';
+    ctx.globalAlpha = 1;
+  }
+
+  // "Press SPACE to continue" prompt once the cutscene has played out
+  if (demonCutsceneDone) {
+    const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffaa66';
+    ctx.font = FONT_14B;
+    ctx.textAlign = 'center';
+    ctx.fillText('Press SPACE to continue', W / 2, H - 22);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }
+}
+
 function drawEmeraldCutscene() {
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, W, H);
@@ -9480,6 +9773,8 @@ function draw() {
     drawSfxScreen();
   } else if (gameState === 'emeraldCutscene') {
     drawEmeraldCutscene();
+  } else if (gameState === 'demonCutscene') {
+    drawDemonCutscene();
   } else {
     // Draw city background — destroyed ruins for level 4, neon city otherwise.
     // Descent mode (3-1) handles its own background inside the render chain below.
@@ -10852,6 +11147,25 @@ function gameTick() {
     deathTimer++;
     if (!storyScrollDone && deathTimer > 3) { // near-immediate start
       storyScrollY += 0.022;
+    }
+  }
+  // Demon-rise cutscene after 3-2
+  if (gameState === 'demonCutscene') {
+    demonCutsceneTimer++;
+    // Schedule audio cues — building rumble bursts then a roar at the apex
+    if (!demonCutsceneRumbleScheduled && demonCutsceneTimer > 10) {
+      demonCutsceneRumbleScheduled = true;
+      try { playLavaBubble(); } catch(e) {}
+      setTimeout(() => { try { playLavaBubble(); } catch(e) {} }, 900);
+      setTimeout(() => { try { playLavaBubble(); } catch(e) {} }, 1900);
+    }
+    if (!demonCutsceneRoarScheduled && demonCutsceneTimer > 220) {
+      demonCutsceneRoarScheduled = true;
+      try { playDragonRoar(); } catch(e) {}
+    }
+    // Mark done so the player can press SPACE to advance
+    if (!demonCutsceneDone && demonCutsceneTimer > DEMON_CUTSCENE_LEN) {
+      demonCutsceneDone = true;
     }
   }
   if (gameState === 'transition') {
