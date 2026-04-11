@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cutscene Test — Volcano Demon Rising</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #050201;
+      color: #d0c0a0;
+      font-family: monospace;
+      overflow: hidden;
+      height: 100%;
+    }
+    #wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 12px;
+    }
+    canvas {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: #000;
+      box-shadow: 0 0 40px #4a1800;
+      border: 2px solid #2a0c04;
+    }
+    .hint {
+      font-size: 12px;
+      opacity: 0.75;
+    }
+    button {
+      background: #2a0c04;
+      color: #ffcc66;
+      border: 1px solid #5a1800;
+      padding: 8px 16px;
+      font-family: monospace;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: #4a1800; }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="900" height="550"></canvas>
+  <div class="hint">Click canvas to start / replay. Audio requires user interaction.</div>
+  <button id="replay">Replay</button>
+</div>
+<script>
+"use strict";
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+const P = 4; // pixel grid size (32-bit look)
+
+// ── Image assets (real game art) ──
+const playerImg = new Image();
+playerImg.src = 'assets/ggd-clean.png';
+let playerImgReady = false;
+playerImg.onload = () => { playerImgReady = true; };
+
+const stoneDragonImg = new Image();
+stoneDragonImg.src = 'assets/stone-dragon.png';
+let stoneDragonReady = false;
+stoneDragonImg.onload = () => { stoneDragonReady = true; };
+
+const volcanicDemonImg = new Image();
+volcanicDemonImg.src = 'assets/volcanic-demon.png';
+let volcanicDemonReady = false;
+volcanicDemonImg.onload = () => { volcanicDemonReady = true; };
+
+const SPRITE_W = 72;
+const SPRITE_H = 76;
+
+// Audio setup
+let audioCtx = null;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playRumble(duration, peak) {
+  try {
+    const ac = getAudio();
+    const now = ac.currentTime;
+    const len = Math.floor(ac.sampleRate * duration);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 120;
+    lp.Q.value = 0.7;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(peak, now + duration * 0.4);
+    gain.gain.linearRampToValueAtTime(peak * 0.9, now + duration * 0.9);
+    gain.gain.linearRampToValueAtTime(0, now + duration);
+    src.connect(lp);
+    lp.connect(gain);
+    gain.connect(ac.destination);
+    src.start(now);
+  } catch (e) {}
+}
+
+function playRoar(delay) {
+  try {
+    const ac = getAudio();
+    const now = ac.currentTime + delay;
+    const dur = 2.8;
+    // Main growl
+    const main = ac.createOscillator();
+    main.type = 'sawtooth';
+    main.frequency.setValueAtTime(180, now);
+    main.frequency.linearRampToValueAtTime(110, now + 0.5);
+    main.frequency.linearRampToValueAtTime(80, now + 1.6);
+    main.frequency.linearRampToValueAtTime(55, now + dur);
+    // Vibrato
+    const lfo = ac.createOscillator();
+    lfo.frequency.value = 8;
+    const lfoGain = ac.createGain();
+    lfoGain.gain.value = 14;
+    lfo.connect(lfoGain);
+    lfoGain.connect(main.frequency);
+    // Formant
+    const formant = ac.createBiquadFilter();
+    formant.type = 'bandpass';
+    formant.frequency.setValueAtTime(500, now);
+    formant.frequency.linearRampToValueAtTime(220, now + dur);
+    formant.Q.value = 1.8;
+    const mainGain = ac.createGain();
+    mainGain.gain.setValueAtTime(0, now);
+    mainGain.gain.linearRampToValueAtTime(0.55, now + 0.15);
+    mainGain.gain.setValueAtTime(0.55, now + 1.9);
+    mainGain.gain.linearRampToValueAtTime(0, now + dur);
+    main.connect(formant);
+    formant.connect(mainGain);
+    mainGain.connect(ac.destination);
+    main.start(now);
+    main.stop(now + dur + 0.1);
+    lfo.start(now);
+    lfo.stop(now + dur + 0.1);
+    // Sub bass body
+    const sub = ac.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(75, now);
+    sub.frequency.exponentialRampToValueAtTime(35, now + dur);
+    const subGain = ac.createGain();
+    subGain.gain.setValueAtTime(0, now);
+    subGain.gain.linearRampToValueAtTime(0.7, now + 0.2);
+    subGain.gain.setValueAtTime(0.7, now + 1.9);
+    subGain.gain.linearRampToValueAtTime(0, now + dur);
+    sub.connect(subGain);
+    subGain.connect(ac.destination);
+    sub.start(now);
+    sub.stop(now + dur + 0.1);
+    // Throat noise
+    const len = Math.floor(ac.sampleRate * dur);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const noise = ac.createBufferSource();
+    noise.buffer = buf;
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(450, now);
+    bp.frequency.linearRampToValueAtTime(200, now + dur);
+    bp.Q.value = 1.2;
+    const nGain = ac.createGain();
+    nGain.gain.setValueAtTime(0, now);
+    nGain.gain.linearRampToValueAtTime(0.28, now + 0.2);
+    nGain.gain.setValueAtTime(0.28, now + 1.9);
+    nGain.gain.linearRampToValueAtTime(0, now + dur);
+    noise.connect(bp);
+    bp.connect(nGain);
+    nGain.connect(ac.destination);
+    noise.start(now);
+  } catch (e) {}
+}
+
+// Cutscene state
+let t = 0; // frames elapsed
+let shakeAmt = 0;
+let narrationAlpha = 0;
+let narrationText = '';
+let roarPlayed = false;
+let rumbleTimers = [];
+
+// Timing (frames at 60fps)
+const FRAME = 1 / 60;
+const PHASE_HOLD = 60;         // 0-60: pause on altar
+const PHASE_RUMBLE = 90;       // 60-150: rumbling begins
+const PHASE_RISE_END = 330;    // 150-330: demon rises (3 seconds)
+const PHASE_ROAR_END = 450;    // 330-450: roar + big shake
+const PHASE_NARR_END = 660;    // 450-660: narration shown
+const PHASE_FADE_END = 780;    // 660-780: fade to black
+
+function resetCutscene() {
+  t = 0;
+  shakeAmt = 0;
+  narrationAlpha = 0;
+  narrationText = '';
+  roarPlayed = false;
+  rumbleTimers.forEach(id => clearTimeout(id));
+  rumbleTimers = [];
+}
+
+function startCutscene() {
+  resetCutscene();
+  // Schedule rumbles during the rise
+  rumbleTimers.push(setTimeout(() => playRumble(1.2, 0.35), 1000));
+  rumbleTimers.push(setTimeout(() => playRumble(1.8, 0.55), 1900));
+  rumbleTimers.push(setTimeout(() => playRumble(2.0, 0.75), 3200));
+}
+
+// ── 32-bit palette ──
+const PAL = {
+  void:   '#030101',
+  deep:   '#0a0504',
+  dark:   '#160b07',
+  rockD:  '#2a130a',
+  rock:   '#4a2318',
+  rockL:  '#6c3a22',
+  rockH:  '#965030',
+  lavaD:  '#882200',
+  lava:   '#cc4400',
+  lavaH:  '#ffaa22',
+  lavaHi: '#fff0aa',
+  dragonD: '#1a0a08',
+  dragon:  '#3a1a10',
+  dragonL: '#6a3018',
+  dragonH: '#9a4820',
+  bronze:  '#c4704a',
+  green:   '#22ff66',
+  greenL:  '#aaffbb',
+  greenD:  '#088833',
+  demonD:  '#030000',
+  demon:   '#0a0302',
+  demonR:  '#220806',
+  demonH:  '#ff3300',
+  demonEye:'#ff4400',
+  demonEyeH:'#ffe088',
+  skin:    '#e8c48a',
+  cloth:   '#4466dd',
+};
+
+// ── Player sprite — real game image, scaled up for dramatic framing ──
+function drawPlayerSprite(cx, by) {
+  // by = feet baseline on the platform — draw larger for cinematic effect
+  const scale = 1.6;
+  const pw = SPRITE_W * scale;
+  const ph = SPRITE_H * scale;
+  if (playerImgReady) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(playerImg, cx - pw / 2, by - ph, pw, ph);
+    ctx.imageSmoothingEnabled = true;
+  }
+  // No rim-light rectangle — keep the character sprite clean with no box around it.
+}
+
+// ── Dragon statue — foreground silhouette with thick green outline ──
+// Renders as a dark shadow shape with a glowing green outline, sitting
+// close to the camera (largest element on screen).
+function drawDragonSilhouette(cx, by, intensity) {
+  if (!stoneDragonReady) return;
+  // Small centered statue in the foreground
+  const targetW = 240;
+  const aspect = stoneDragonImg.width / stoneDragonImg.height;
+  const drawW = targetW;
+  const drawH = drawW / aspect;
+  const dx = cx - drawW / 2;
+  const dy = by - drawH;
+
+  const pulse = 0.6 + Math.sin(t * 0.09) * 0.25;
+
+  // Offscreen silhouette buffer — pure black silhouette, no interior detail
+  const pad = 20;
+  const off = document.createElement('canvas');
+  off.width = Math.ceil(drawW) + pad * 2;
+  off.height = Math.ceil(drawH) + pad * 2;
+  const octx = off.getContext('2d');
+  octx.imageSmoothingEnabled = false;
+  octx.drawImage(stoneDragonImg, pad, pad, drawW, drawH);
+  // Flood-fill the sprite with pure black — 100% shadow inside
+  octx.globalCompositeOperation = 'source-atop';
+  octx.fillStyle = '#000000';
+  octx.fillRect(0, 0, off.width, off.height);
+  octx.globalCompositeOperation = 'source-over';
+
+  // Green silhouette copy (used to stamp the outline)
+  const outline = document.createElement('canvas');
+  outline.width = off.width;
+  outline.height = off.height;
+  const outCtx = outline.getContext('2d');
+  outCtx.imageSmoothingEnabled = false;
+  outCtx.drawImage(stoneDragonImg, pad, pad, drawW, drawH);
+  outCtx.globalCompositeOperation = 'source-atop';
+  outCtx.fillStyle = '#44ff88';
+  outCtx.fillRect(0, 0, outline.width, outline.height);
+  outCtx.globalCompositeOperation = 'source-over';
+
+  // 1. Stamp several offset green outlines to form a thick glowing ring
+  ctx.globalAlpha = pulse * intensity;
+  const ringOffsets = [
+    [-4, 0], [4, 0], [0, -4], [0, 4],
+    [-3, -3], [3, -3], [-3, 3], [3, 3],
+    [-5, 0], [5, 0], [0, -5], [0, 5],
+    [-2, -4], [2, -4], [-2, 4], [2, 4]
+  ];
+  for (const [ox, oy] of ringOffsets) {
+    ctx.drawImage(outline, dx - pad + ox, dy - pad + oy);
+  }
+  ctx.globalAlpha = 1;
+
+  // 2. Draw the pure-black silhouette ON TOP so the interior is fully dark
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, dx - pad, dy - pad);
+  ctx.imageSmoothingEnabled = true;
+}
+
+
+// ── Volcanic demon — real image asset ──
+function drawDemon(cx, topY, lavaGlowAmt) {
+  // Lava backlight behind the demon — rich radial plume
+  const glowCy = topY + 260;
+  const glowGrad = ctx.createRadialGradient(cx, glowCy, 30, cx, glowCy, 520);
+  glowGrad.addColorStop(0, `rgba(255, 160, 50, ${0.85 * lavaGlowAmt})`);
+  glowGrad.addColorStop(0.3, `rgba(255, 90, 15, ${0.55 * lavaGlowAmt})`);
+  glowGrad.addColorStop(0.65, `rgba(200, 40, 0, ${0.3 * lavaGlowAmt})`);
+  glowGrad.addColorStop(1, 'rgba(40, 0, 0, 0)');
+  ctx.fillStyle = glowGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Heat shimmer — a few drifting embers around the demon
+  for (let i = 0; i < 16; i++) {
+    const emberSeed = (i * 7919 + Math.floor(t * 0.3) * 31) & 0xFFFF;
+    const ex = cx - 300 + (emberSeed % 600);
+    const ey = topY + 60 + ((emberSeed * 13) & 0x1FF);
+    const ePh = (t * 0.7 + i * 17) % 140;
+    const eyAnim = ey - ePh * 1.5;
+    if (eyAnim < 0 || eyAnim > H) continue;
+    const fade = Math.max(0, 1 - ePh / 140);
+    ctx.globalAlpha = fade * 0.7 * lavaGlowAmt;
+    ctx.fillStyle = (i & 1) ? '#ffaa22' : '#ff6622';
+    ctx.fillRect(Math.floor(ex / 4) * 4, Math.floor(eyAnim / 4) * 4, 4, 4);
+  }
+  ctx.globalAlpha = 1;
+
+  if (!volcanicDemonReady) {
+    // Fallback silhouette so the cutscene still shows something
+    ctx.fillStyle = '#1a0a08';
+    ctx.fillRect(cx - 200, topY, 400, 400);
+    return;
+  }
+
+  // Make the demon LARGE — dominates the upper screen
+  const targetW = 820;
+  const aspect = volcanicDemonImg.width / volcanicDemonImg.height;
+  const drawW = targetW;
+  const drawH = drawW / aspect;
+  const dx = cx - drawW / 2;
+  const dy = topY;
+
+  // Drop shadow behind the demon
+  ctx.globalAlpha = 0.35 * lavaGlowAmt;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(cx, dy + drawH - 20, drawW * 0.45, 20, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Draw the demon image with crisp pixel edges
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(volcanicDemonImg, dx, dy, drawW, drawH);
+  ctx.imageSmoothingEnabled = true;
+  // No rectangle overlay — keep the demon silhouette clean.
+}
+
+// ── Cave interior — matches the 3-1 / 3-2 back wall + side cliffs ──
+function drawVolcanoInterior(tint) {
+  // 2-3 style palette (same hex values as the main game's WPAL)
+  const WPAL = {
+    deep: '#0c0604', dark: '#160d08', mid: '#24160e',
+    surface: '#362010', light: '#4a2e1a', edge: '#5c3820',
+    shadow: '#080402', lavaD: '#882200', lava: '#cc4400', lavaH: '#ffaa22'
+  };
+
+  // Base fill — cavern void
+  ctx.fillStyle = '#020001';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── BACK WALL — stratified band texture (identical to main game 3-2) ──
+  for (let y = 0; y < H; y += P) {
+    const worldRow = Math.floor(y / P);
+    const rawPhase = worldRow * 0.08;
+    const bandPhase = ((rawPhase % 1) + 1) % 1;
+    for (let x = 0; x < W; x += P) {
+      const h = ((x * 7919 + worldRow * 4813 + 31337) >>> 0) & 0xFFFF;
+      let color;
+      if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+      else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+      else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+      else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+      else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, P, P);
+    }
+    // Crevices across the back wall
+    if ((worldRow & 3) === 0) {
+      for (let cx = 0; cx < W; cx += P * 7) {
+        const ch = ((cx * 16807 + worldRow * 48271) >>> 0) & 0xFFFF;
+        if ((ch & 7) !== 0) continue;
+        ctx.fillStyle = WPAL.shadow;
+        ctx.fillRect(cx, y, P, P);
+      }
+    }
+  }
+  // Dim the back wall so it reads as deeper than the side walls
+  ctx.globalAlpha = 0.45;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+
+  // Pulsing lava-red tint over the back wall
+  ctx.globalAlpha = 0.4 * tint;
+  ctx.fillStyle = '#aa2200';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+
+  // ── SIDE WALLS — stratified cliff texture with jagged inner edge,
+  //    crevices, and pulsing lava veins (same as main game 3-2 walls) ──
+  const WALL_THICKNESS = 56;
+  for (let y = 0; y < H; y += P) {
+    const worldRow = Math.floor(y / P);
+    const absRow = Math.abs(worldRow);
+    const leftJag = ((absRow * 2654435761 >>> 16) % 5) * P + ((absRow * 1597463007 >>> 12) % 3) * P;
+    const rightJag = ((absRow * 3266489917 >>> 14) % 5) * P + ((absRow * 1099511628 >>> 18) % 3) * P;
+    const leftInner = WALL_THICKNESS + leftJag;
+    const rightInner = W - WALL_THICKNESS - rightJag;
+
+    // ── LEFT WALL ──
+    for (let x = 0; x <= leftInner + P * 4; x += P) {
+      const h = ((x * 7919 + worldRow * 4813 + 31337) >>> 0) & 0xFFFF;
+      const edgeDist = leftInner - x;
+      if (edgeDist < 0) {
+        if (h % 3 === 0 && edgeDist > -P * 4) {
+          ctx.fillStyle = h % 5 === 0 ? WPAL.dark : WPAL.deep;
+          ctx.fillRect(x, y, P, P);
+        } else if (h % 7 === 0 && edgeDist > -P * 2) {
+          ctx.fillStyle = WPAL.shadow;
+          ctx.fillRect(x, y, P, P);
+        }
+        continue;
+      }
+      if (edgeDist < P * 4) {
+        if (edgeDist < P) ctx.fillStyle = WPAL.shadow;
+        else if (edgeDist < P * 2) ctx.fillStyle = h % 2 === 0 ? WPAL.deep : WPAL.shadow;
+        else ctx.fillStyle = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+        ctx.fillRect(x, y, P, P);
+        continue;
+      }
+      const rawPhase = (worldRow + x * 0.3) * 0.08;
+      const bandPhase = ((rawPhase % 1) + 1) % 1;
+      let color;
+      if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+      else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+      else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+      else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+      else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, P, P);
+    }
+
+    // ── RIGHT WALL ──
+    for (let x = rightInner - P * 4; x < W; x += P) {
+      const h = ((x * 7919 + worldRow * 4813 + 42139) >>> 0) & 0xFFFF;
+      const edgeDist = x - rightInner;
+      if (edgeDist < 0) {
+        if (h % 3 === 0 && edgeDist > -P * 4) {
+          ctx.fillStyle = h % 5 === 0 ? WPAL.dark : WPAL.deep;
+          ctx.fillRect(x, y, P, P);
+        } else if (h % 7 === 0 && edgeDist > -P * 2) {
+          ctx.fillStyle = WPAL.shadow;
+          ctx.fillRect(x, y, P, P);
+        }
+        continue;
+      }
+      if (edgeDist < P * 4) {
+        if (edgeDist < P) ctx.fillStyle = WPAL.shadow;
+        else if (edgeDist < P * 2) ctx.fillStyle = h % 2 === 0 ? WPAL.deep : WPAL.shadow;
+        else ctx.fillStyle = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+        ctx.fillRect(x, y, P, P);
+        continue;
+      }
+      const rawPhase = (worldRow + x * 0.3) * 0.08;
+      const bandPhase = ((rawPhase % 1) + 1) % 1;
+      let color;
+      if (bandPhase < 0.05) color = h % 2 === 0 ? WPAL.edge : WPAL.light;
+      else if (bandPhase < 0.2) color = h % 3 === 0 ? WPAL.light : WPAL.surface;
+      else if (bandPhase < 0.55) color = h % 3 === 0 ? WPAL.surface : h % 2 === 0 ? WPAL.mid : WPAL.light;
+      else if (bandPhase < 0.8) color = h % 3 === 0 ? WPAL.mid : WPAL.dark;
+      else color = h % 2 === 0 ? WPAL.dark : WPAL.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, P, P);
+    }
+
+    // Crevices on both walls
+    if ((worldRow & 3) === 0) {
+      for (let cx = 0; cx < leftInner; cx += P * 7) {
+        const ch = ((cx * 16807 + worldRow * 48271) >>> 0) & 0xFFFF;
+        if ((ch & 7) !== 0) continue;
+        ctx.fillStyle = WPAL.shadow;
+        ctx.fillRect(cx, y, P, P);
+      }
+      for (let cx = rightInner; cx < W; cx += P * 7) {
+        const ch = ((cx * 16807 + worldRow * 48271) >>> 0) & 0xFFFF;
+        if ((ch & 7) !== 0) continue;
+        ctx.fillStyle = WPAL.shadow;
+        ctx.fillRect(cx, y, P, P);
+      }
+    }
+
+    // Pulsing lava veins — streak across both walls every ~32 rows
+    if ((worldRow & 31) < 2) {
+      const lh = ((worldRow * 48271) >>> 0) & 0xFF;
+      const veinPulse = Math.sin(t * 0.03 + worldRow * 0.1) * 0.3 + 0.5;
+      ctx.globalAlpha = veinPulse * 0.55;
+      ctx.fillStyle = lh % 2 === 0 ? WPAL.lavaD : WPAL.lava;
+      const lvx = (lh * 7) % Math.max(1, leftInner - P * 2);
+      ctx.fillRect(Math.floor(lvx / P) * P, y, P * 3, P);
+      const rvx = rightInner + ((lh * 13) % Math.max(1, W - rightInner - P * 2));
+      ctx.fillRect(Math.floor(rvx / P) * P, y, P * 3, P);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Lava floor at the bottom (pulsing glow)
+  const floorY = H - 80;
+  const floorGrad = ctx.createLinearGradient(0, floorY - 60, 0, H);
+  const fpulse = 0.55 + Math.sin(t * 0.08) * 0.15;
+  floorGrad.addColorStop(0, 'rgba(255, 80, 20, 0)');
+  floorGrad.addColorStop(0.5, `rgba(255, 100, 20, ${fpulse * 0.4})`);
+  floorGrad.addColorStop(1, `rgba(255, 160, 40, ${fpulse})`);
+  ctx.fillStyle = floorGrad;
+  ctx.fillRect(0, floorY - 60, W, H - (floorY - 60));
+  ctx.fillStyle = WPAL.lava;
+  ctx.fillRect(0, floorY, W, H - floorY);
+  ctx.fillStyle = WPAL.lavaH;
+  for (let lx = 0; lx < W; lx += P * 2) {
+    const h = ((lx + t) * 7919) & 0xFFFF;
+    if (h % 5 === 0) ctx.fillRect(lx, floorY, P, P);
+  }
+}
+
+// ── Mid-ground rock platform — organic outcropping the player stands on ──
+// Returns {topY, leftAt, rightAt} so callers know where the player should stand
+// and where the platform's silhouette is at any row.
+function drawRockPlatform(cx, topY, w, h) {
+  const DP = 4;
+  const pc = {
+    deep: '#0c0604', dark: '#160d08', mid: '#24160e',
+    surface: '#362010', light: '#4a2e1a', edge: '#5c3820',
+    shadow: '#080402'
+  };
+  const ys = Math.floor(topY / DP) * DP;
+  const ye = Math.floor((topY + h) / DP) * DP;
+  const rows = (ye - ys) / DP;
+  const halfBase = w / 2;
+  const seed = Math.floor(cx) * 1301;
+
+  // Build per-row left/right bounds — asymmetric, wavy edge
+  const leftB = new Float32Array(rows);
+  const rightB = new Float32Array(rows);
+  for (let r = 0; r < rows; r++) {
+    const rn = r / (rows - 1);        // 0 at top, 1 at bottom
+    // Vertical profile: widest near the top third, tapering slightly at top and bottom
+    // Using a shaped curve for a bulging rock feel
+    const shape = 1 - Math.pow(Math.abs(rn - 0.35) * 1.35, 2.2);
+    const widthAtRow = halfBase * Math.max(0.45, shape);
+    // Independent wavy noise per side
+    const leftNoise = Math.sin(rn * 6.4 + seed * 0.01) * 12
+                    + Math.sin(rn * 13.1 + seed * 0.03) * 6
+                    + ((((r * 7919) ^ seed) >>> 0) & 7) * 0.8;
+    const rightNoise = Math.sin(rn * 5.3 + seed * 0.02 + 1.7) * 12
+                     + Math.sin(rn * 11.4 + seed * 0.04) * 6
+                     + ((((r * 4813) ^ seed) >>> 0) & 7) * 0.8;
+    leftB[r] = cx - widthAtRow + leftNoise;
+    rightB[r] = cx + widthAtRow + rightNoise;
+  }
+
+  // Drop shadow under the platform (organic blob)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.beginPath();
+  ctx.ellipse(cx, ye + 10, w * 0.55, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Draw rows from top to bottom with band shading
+  for (let r = 0; r < rows; r++) {
+    const y = ys + r * DP;
+    const lx = Math.floor(leftB[r] / DP) * DP;
+    const rx = Math.ceil(rightB[r] / DP) * DP;
+    for (let x = lx; x < rx; x += DP) {
+      const hhash = ((x * 7919 + y * 4813 + seed) >>> 0) & 0xFFFF;
+      // Distance from each edge (px)
+      const distL = x - lx;
+      const distR = rx - x - DP;
+      const edgeDist = Math.min(distL, distR);
+      // Top-first band shading
+      let color;
+      if (r === 0 || (r === 1 && (hhash & 3) === 0)) {
+        color = (hhash % 4 === 0) ? pc.edge : (hhash % 3 === 0) ? pc.light : pc.surface;
+      } else if (r <= 2) {
+        color = (hhash % 2 === 0) ? pc.surface : pc.mid;
+      } else if (r <= 5) {
+        color = (hhash % 3 === 0) ? pc.mid : pc.dark;
+      } else {
+        color = (hhash & 1) ? pc.dark : pc.deep;
+      }
+      // Darker at the very edges for a curved-volume look
+      if (edgeDist < DP) color = pc.shadow;
+      else if (edgeDist < DP * 2) color = (color === pc.surface || color === pc.light) ? pc.mid : pc.deep;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, DP, DP);
+    }
+    // Sparse crevice cracks
+    if (r > 1 && r < rows - 1 && ((r * 13 + seed) & 7) === 0) {
+      const cxCrack = Math.floor(((lx + rx) / 2) / DP) * DP;
+      ctx.fillStyle = pc.shadow;
+      ctx.fillRect(cxCrack, y, DP, DP);
+    }
+  }
+
+  // Random rock bumps popping out above the top edge — organic protrusions
+  const bumpSeeds = [
+    { f: 0.18, h: 3 },
+    { f: 0.42, h: 5 },
+    { f: 0.68, h: 2 },
+    { f: 0.86, h: 4 }
+  ];
+  for (const bs of bumpSeeds) {
+    const bx = Math.floor((leftB[0] + (rightB[0] - leftB[0]) * bs.f) / DP) * DP;
+    for (let b = 0; b < bs.h; b++) {
+      const by = ys - (b + 1) * DP;
+      ctx.fillStyle = b === 0 ? pc.light : b < bs.h - 1 ? pc.edge : pc.surface;
+      ctx.fillRect(bx, by, DP, DP);
+      if (b === 0) {
+        ctx.fillStyle = pc.shadow;
+        ctx.fillRect(bx - DP, by, DP, DP);
+        ctx.fillRect(bx + DP, by, DP, DP);
+      }
+    }
+  }
+
+  // Lava vein glow along the bottom curve of the platform
+  const pulse = 0.5 + Math.sin(t * 0.06) * 0.15;
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#cc4400';
+  for (let r = rows - 3; r < rows; r++) {
+    const y = ys + r * DP;
+    const lx = Math.floor(leftB[r] / DP) * DP;
+    const rx = Math.ceil(rightB[r] / DP) * DP;
+    ctx.fillRect(lx + DP, y + DP, rx - lx - DP * 2, DP);
+  }
+  ctx.fillStyle = '#ff8822';
+  for (let c = 0; c < 6; c++) {
+    const cr = rows - 2;
+    const lx = leftB[cr];
+    const rx = rightB[cr];
+    const cx2 = Math.floor((lx + (rx - lx) * (c / 5)) / DP) * DP;
+    if ((((c * 17 + seed) | 0) & 3) === 0) {
+      ctx.fillRect(cx2, ys + cr * DP + DP, DP, DP);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDialog(text, alpha) {
+  if (alpha <= 0) return;
+  ctx.globalAlpha = alpha * 0.85;
+  ctx.fillStyle = '#000';
+  const boxW = 640;
+  const boxH = 70;
+  const boxX = W / 2 - boxW / 2;
+  const boxY = H - 100;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = '#cc4400';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#ffcc88';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, W / 2, boxY + 42);
+  ctx.globalAlpha = 1;
+}
+
+// ── Main render loop ──
+function render() {
+  t++;
+
+  // Update shake
+  if (t >= PHASE_RUMBLE && t < PHASE_ROAR_END) {
+    const riseProg = Math.min(1, (t - PHASE_RUMBLE) / (PHASE_RISE_END - PHASE_RUMBLE));
+    shakeAmt = riseProg * 6;
+    if (t >= PHASE_RISE_END) shakeAmt = 14; // peak at roar
+  } else {
+    shakeAmt *= 0.85;
+  }
+
+  // Play roar once when the demon is fully up
+  if (t === PHASE_RISE_END && !roarPlayed) {
+    playRoar(0);
+    roarPlayed = true;
+  }
+
+  // Narration after the roar
+  if (t >= PHASE_ROAR_END && t < PHASE_NARR_END) {
+    const nt = (t - PHASE_ROAR_END) / 30;
+    narrationAlpha = Math.min(1, nt);
+    narrationText = '"The emerald was never meant to be returned..."';
+  } else if (t >= PHASE_NARR_END) {
+    narrationAlpha = Math.max(0, narrationAlpha - 0.02);
+  }
+
+  ctx.save();
+  if (shakeAmt > 0) {
+    ctx.translate((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt);
+  }
+
+  // Background tint increases during the rise
+  const tintAmt = t < PHASE_RUMBLE ? 0.5 :
+                  t < PHASE_ROAR_END ? 0.5 + (t - PHASE_RUMBLE) / (PHASE_ROAR_END - PHASE_RUMBLE) * 0.8 :
+                  1.3;
+  drawVolcanoInterior(tintAmt);
+
+  // ── SCENE LAYOUT ──
+  // Mid-ground rock platform — bigger
+  const platformCx = W * 0.38;
+  const platformTop = H * 0.78;
+  const platformW = 520;
+  const platformH = 150;
+  // Statue in the foreground — moved higher
+  const statueCx = W * 0.62;
+  const statueBaseY = H + 40;
+
+  // ── LAYER ORDER (back → front) ──
+  // 1. Volcanic demon rising — LARGE, ends centered vertically on the screen
+  if (t >= PHASE_RUMBLE) {
+    const riseProg = Math.min(1, (t - PHASE_RUMBLE) / (PHASE_RISE_END - PHASE_RUMBLE));
+    const eased = riseProg * riseProg * (3 - 2 * riseProg);
+    // Target: demon top edge ends at y ≈ 40 (near the top of the screen)
+    // so the demon's head/face sits in the middle of the screen at apex.
+    const topY = H + 60 - eased * (H + 20);
+    // Clip so the demon appears to rise from behind the rock platform
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, platformTop + 4);
+    ctx.clip();
+    drawDemon(W / 2, topY, Math.min(1, eased * 1.5));
+    ctx.restore();
+  }
+
+  // 2. Rock platform in the mid-ground — drawn AFTER the demon so it occludes
+  drawRockPlatform(platformCx, platformTop, platformW, platformH);
+
+  // 3. Player standing on top of the rock platform
+  drawPlayerSprite(platformCx, platformTop);
+
+  // 4. Dragon statue in the foreground (small, lower-right of frame)
+  drawDragonSilhouette(statueCx, statueBaseY, 1);
+
+  // Fade to black at the very end
+  if (t >= PHASE_NARR_END) {
+    const fadeT = Math.min(1, (t - PHASE_NARR_END) / (PHASE_FADE_END - PHASE_NARR_END));
+    ctx.fillStyle = `rgba(0, 0, 0, ${fadeT})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Dialog
+  drawDialog(narrationText, narrationAlpha);
+
+  ctx.restore();
+
+  // Loop the cutscene once it's fully done
+  if (t < PHASE_FADE_END + 60) {
+    requestAnimationFrame(render);
+  } else {
+    // Show replay hint
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ffcc66';
+    ctx.font = 'bold 24px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Click canvas or Replay button to watch again', W / 2, H / 2);
+  }
+}
+
+// ── Start on click ──
+function kick() {
+  startCutscene();
+  render();
+}
+
+canvas.addEventListener('click', kick);
+document.getElementById('replay').addEventListener('click', kick);
+
+// Initial frame — show a still
+ctx.fillStyle = '#000';
+ctx.fillRect(0, 0, W, H);
+ctx.fillStyle = '#ffcc66';
+ctx.font = 'bold 22px monospace';
+ctx.textAlign = 'center';
+ctx.fillText('Click to play the volcano-demon cutscene', W / 2, H / 2);
+ctx.font = '13px monospace';
+ctx.fillStyle = '#998855';
+ctx.fillText('32-bit style preview — standalone test file', W / 2, H / 2 + 30);
+</script>
+</body>
+</html>
