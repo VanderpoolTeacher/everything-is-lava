@@ -1101,7 +1101,6 @@ const player = {
   kickTimer: 0,     // frames into kick animation
   facingRight: true, // last horizontal direction faced
   idleTimer: 0,      // frames since last movement input
-  crouching: false,    // crouch state (down arrow / S key while grounded)
   depthScale: 1,       // perspective scale — >1 on front trees, <1 on back trees
   knockbackTimer: 0    // frames of knockback animation remaining
 };
@@ -3119,8 +3118,6 @@ function respawnPlayer() {
   player.kickTimer = 0;
   player.facingRight = true;
   player.idleTimer = 0;
-  player.crouching = false;
-  player.h = SPRITE_H;
   player.invincible = 120; // ~2 seconds of invincibility
   // Clear immediate threats near player
   lavaDrops = [];
@@ -3385,13 +3382,8 @@ function update() {
     spawnLavaDrop();
   }
 
-  // Handle jump — uncrouch first if needed
+  // Handle jump
   if (jumpBuffered) {
-    if (player.crouching && !verticalMode) {
-      player.crouching = false;
-      player.h = SPRITE_H;
-      player.y = getGroundY(player.x + scrollOffset) - player.h;
-    }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
       player.grounded = false;
@@ -3422,18 +3414,6 @@ function update() {
   // Track facing direction
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
-
-  // Crouch — down arrow or S while grounded (disabled in vertical climb)
-  const wantCrouch = !verticalMode && player.grounded && (keys['ArrowDown'] || keys['KeyS']);
-  if (wantCrouch && !player.crouching) {
-    player.crouching = true;
-    player.h = Math.floor(SPRITE_H * 0.5);
-    player.y = GROUND_Y - player.h; // stay on ground
-  } else if (!wantCrouch && player.crouching) {
-    player.crouching = false;
-    player.h = SPRITE_H;
-    player.y = GROUND_Y - player.h;
-  }
 
   // Idle detection — drop lava on player if they don't move for ~1 second (not in vertical)
   const isMoving = verticalMode || moveX !== 0 || !player.grounded || player.kicking;
@@ -4315,8 +4295,6 @@ let deathAnimActive = false;
 
 function die() {
   if (player.invincible > 0) return; // invincibility frames active
-  player.crouching = false;
-  player.h = SPRITE_H;
   lives--;
   player.alive = false;
   stopSiren();
@@ -4549,11 +4527,6 @@ function updateDojo() {
 
   // Same movement as main game but no lava, no vehicles, no scrolling
   if (jumpBuffered) {
-    if (player.crouching) {
-      player.crouching = false;
-      player.h = SPRITE_H;
-      player.y = GROUND_Y - player.h;
-    }
     if (player.grounded) {
       player.vy = JUMP_FORCE;
       player.grounded = false;
@@ -4581,18 +4554,6 @@ function updateDojo() {
 
   if (moveX > 0) player.facingRight = true;
   else if (moveX < 0) player.facingRight = false;
-
-  // Crouch — down arrow or S while grounded
-  const wantCrouch = player.grounded && (keys['ArrowDown'] || keys['KeyS']);
-  if (wantCrouch && !player.crouching) {
-    player.crouching = true;
-    player.h = Math.floor(SPRITE_H * 0.5);
-    player.y = GROUND_Y - player.h;
-  } else if (!wantCrouch && player.crouching) {
-    player.crouching = false;
-    player.h = SPRITE_H;
-    player.y = GROUND_Y - player.h;
-  }
 
   if (player.kicking) {
     player.kickTimer++;
@@ -7202,11 +7163,7 @@ function drawPlayer() {
     let scaleYAnim = 1;
     let scaleXAnim = 1;
 
-    if (player.crouching) {
-      // ── CROUCH ANIMATION ──
-      scaleYAnim = 0.5;   // squash to half height
-      scaleXAnim = 1.2;   // wider to compensate
-    } else if (player.kicking) {
+    if (player.kicking) {
       // ── KICK ANIMATION ──
       // Kick is a fast forward tilt + leg extension
       const kt = player.kickTimer / 20; // 0 to 1
@@ -8412,7 +8369,6 @@ const HELP_LINES = [
   { label: 'MOVEMENT',     keys: 'A/D  or  \u2190/\u2192' },
   { label: 'JUMP',         keys: 'SPACE  W  or  \u2191' },
   { label: 'DOUBLE JUMP',  keys: 'JUMP again mid-air' },
-  { label: 'CROUCH',       keys: 'S  or  \u2193' },
   { label: 'MUTE',         keys: 'M' },
   { label: 'VOLUME',       keys: '+  /  \u2013' },
   { label: 'RESET',        keys: 'Q' },
@@ -8635,17 +8591,26 @@ function draw() {
     // Draw city background — destroyed ruins for level 4, neon city otherwise
     if (isVolcanoLevel()) {
       if (level === 6 && volcanoBg23Ready) {
-        // Level 2-3: use the volcano-bg-2-3 image for the whole level (zoomed in 25%)
+        // Level 2-3: cover-scale the background so it fills the canvas at any viewport
         const imgAspect = volcanoBg23.width / volcanoBg23.height;
-        const zoom = 1.25;
-        const drawW = W * zoom;
-        const drawH = drawW / imgAspect;
-        // Slow parallax shift based on horizontal scroll
+        const canvasAspect = W / H;
+        let drawW, drawH;
+        if (canvasAspect > imgAspect) {
+          drawW = W;
+          drawH = W / imgAspect;
+        } else {
+          drawH = H;
+          drawW = H * imgAspect;
+        }
+        // Extra headroom so parallax drift can never reveal an edge
+        drawW *= 1.1;
+        drawH *= 1.1;
         const maxShift = Math.max(1, (drawW - W) / 2);
         const rawShift = (scrollOffset * 0.008) % (maxShift * 2);
         const shiftX = rawShift <= maxShift ? -rawShift : -(maxShift * 2 - rawShift);
         const drawX = (W - drawW) / 2 + shiftX;
-        ctx.drawImage(volcanoBg23, drawX, (H - drawH) / 2, drawW, drawH);
+        const drawY = (H - drawH) / 2;
+        ctx.drawImage(volcanoBg23, drawX, drawY, drawW, drawH);
       } else {
         drawDestroyedCitySky();
       }
@@ -8683,7 +8648,6 @@ function draw() {
 
       // ── 1. SKY + CITY BACKGROUND — using volcano-bg-2-3 image ──
       // Background is clipped to only show below the volcano lip
-      const climbProgress = Math.min(1, Math.abs(scrollOffsetY) / CLIMB_TOTAL_HEIGHT);
       const lipScreenYForBg = climbScreenY(-CLIMB_TOTAL_HEIGHT);
       // The bg image should only be visible below the lip
       const bgClipTop = Math.max(0, Math.floor(lipScreenYForBg));
@@ -8695,12 +8659,20 @@ function draw() {
         ctx.rect(0, bgClipTop, W, H - bgClipTop);
         ctx.clip();
         const imgAspect = volcanoBg23.width / volcanoBg23.height;
-        const zoom = 1.25;
-        const drawW = W * zoom;
-        const drawH = drawW / imgAspect;
+        const canvasAspect = W / H;
+        let drawW, drawH;
+        if (canvasAspect > imgAspect) {
+          drawW = W;
+          drawH = W / imgAspect;
+        } else {
+          drawH = H;
+          drawW = H * imgAspect;
+        }
+        drawW *= 1.1;
+        drawH *= 1.1;
         const drawX = (W - drawW) / 2;
-        const bgShift = climbProgress * H * 0.5;
-        ctx.drawImage(volcanoBg23, drawX, bgShift, drawW, drawH);
+        const drawY = (H - drawH) / 2;
+        ctx.drawImage(volcanoBg23, drawX, drawY, drawW, drawH);
         ctx.restore();
       } else {
         const skyGrad = ctx.createLinearGradient(0, bgClipTop, 0, H);
