@@ -1258,47 +1258,29 @@ function generateRuins() {
   }
 }
 
-// ── BURNING VILLAGE (mid-ground parallax layer for Level 4) ──
+// ── BURNING VILLAGE (mid-ground parallax layer for Level 2-1) ──
 let burningVillage = [];
 
 function generateBurningVillage() {
   burningVillage = [];
-  // Sparse structures spread across a wide world strip.
-  // Every standing structure is a house: rectangular body + tall peaked triangle roof.
-  // A few collapsed ruins sprinkled in for variety.
-  const types = ['house', 'house', 'hut', 'house', 'hut', 'house', 'collapsed'];
-  for (let x = 60; x < W + 1800; x += 140 + Math.random() * 220) {
-    const type = types[Math.floor(Math.random() * types.length)];
-    let w, h, roofH, roofStyle;
-    switch (type) {
-      case 'hut':
-        // Small cottage
-        w = 30 + Math.random() * 12;
-        h = 26 + Math.random() * 10;
-        roofH = w * 0.65 + Math.random() * 4; // tall triangle roof
-        roofStyle = 'peaked';
-        break;
-      case 'house':
-        // Standard house
-        w = 38 + Math.random() * 18;
-        h = 34 + Math.random() * 16;
-        roofH = w * 0.6 + Math.random() * 6; // tall triangle roof
-        roofStyle = 'peaked';
-        break;
-      case 'collapsed':
-        w = 30 + Math.random() * 25;
-        h = 15 + Math.random() * 20;
-        roofH = 0;
-        roofStyle = 'none';
-        break;
-    }
+  // House silhouettes spread across a wide world strip.
+  // Every structure is a house: rectangular body + tall peaked triangle roof.
+  // Houses sometimes cluster adjacent to each other, then a larger random gap.
+  let x = 60;
+  while (x < W + 1800) {
+    const w = 48 + Math.random() * 18;
+    const h = 44 + Math.random() * 18;
+    const roofH = w * 0.55 + Math.random() * 6;
     burningVillage.push({
-      x, w, h, roofH, roofStyle, type,
-      firePhase: Math.random() * Math.PI * 2,
-      fireIntensity: 0.4 + Math.random() * 0.6, // how much it burns
-      hasChimney: type === 'house' && Math.random() < 0.5,
+      x, w, h, roofH,
       lean: (Math.random() - 0.5) * 0.04 // slight structural lean
     });
+    // Next spacing: ~35% chance of close neighbor, otherwise a big random gap
+    if (Math.random() < 0.35) {
+      x += w + 6 + Math.random() * 16; // adjacent / touching
+    } else {
+      x += 220 + Math.random() * 340; // normal gap
+    }
   }
 }
 
@@ -1392,7 +1374,38 @@ function generateTrees() {
       sinkExtra: sinkExtra,
       burning: false,
       burnTimer: 0,
-      collapsed: false
+      collapsed: false,
+      igniteAt: -1
+    });
+  }
+
+  // Extra decorative back-layer trees — denser, silhouettes only.
+  // Some are scheduled to catch fire at random times during the level.
+  const heights = { medium: 100, tall: 140 };
+  const canopyWidths = { medium: 50, tall: 60 };
+  const canopyHeights = { medium: 24, tall: 30 };
+  const trunkWidths = { medium: 12, tall: 16 };
+  for (let wx = 120; wx < 10000; wx += 75 + Math.random() * 110) {
+    const size = Math.random() < 0.55 ? 'medium' : 'tall';
+    const sinkExtra = Math.random() < 0.3 ? 8 + Math.random() * 20 : 0;
+    // ~20% of decorative back trees will randomly ignite during the level
+    const igniteAt = Math.random() < 0.2
+      ? 180 + Math.floor(Math.random() * 3000) // 3-53 seconds into the level
+      : -1;
+    trees.push({
+      worldX: wx,
+      size: size,
+      layer: 'back',
+      height: heights[size],
+      canopyW: canopyWidths[size],
+      canopyH: canopyHeights[size],
+      trunkW: trunkWidths[size],
+      flipped: Math.random() < 0.5,
+      sinkExtra: sinkExtra,
+      burning: false,
+      burnTimer: 0,
+      collapsed: false,
+      igniteAt
     });
   }
 }
@@ -3859,10 +3872,21 @@ function update() {
     }
   }
 
+  // Scheduled ignition for decorative back-layer trees
+  if (isVolcanoLevel()) {
+    for (const t of trees) {
+      if (t.layer !== 'back' || t.burning || t.collapsed) continue;
+      if (t.igniteAt > 0 && levelTimer >= t.igniteAt) {
+        t.burning = true;
+      }
+    }
+  }
+
   // Lava-tree contact detection
   if (isVolcanoLevel()) {
     for (const t of trees) {
       if (t.burning || t.collapsed) continue;
+      if (t.layer === 'back') continue; // back trees are purely decorative
       const tsx = t.worldX - scrollOffset;
       const baseY = getGroundY(t.worldX);
       const treeTop = baseY - t.height - t.canopyH;
@@ -5460,8 +5484,18 @@ function drawRuinsLayer(ruins, parallaxSpeed, brightness, isNear) {
       ctx.closePath();
       ctx.fill();
     } else {
-      // Simple crumbled rectangle
-      ctx.fillRect(sx, baseY - r.h, r.w, r.h);
+      // Rubble heap — low, wide jagged pile. Capped so narrow ruins don't form spikes.
+      const pileH = Math.min(r.h * 0.35, r.w * 0.35);
+      ctx.beginPath();
+      ctx.moveTo(sx, baseY);
+      ctx.lineTo(sx + r.w * 0.12, baseY - pileH * (0.55 + ((i * 37) & 7) / 40));
+      ctx.lineTo(sx + r.w * 0.3, baseY - pileH * (0.85 + ((i * 53) & 7) / 60));
+      ctx.lineTo(sx + r.w * 0.5, baseY - pileH * (0.5 + ((i * 71) & 7) / 40));
+      ctx.lineTo(sx + r.w * 0.7, baseY - pileH * (0.95 + ((i * 19) & 7) / 60));
+      ctx.lineTo(sx + r.w * 0.88, baseY - pileH * (0.4 + ((i * 29) & 7) / 40));
+      ctx.lineTo(sx + r.w, baseY);
+      ctx.closePath();
+      ctx.fill();
     }
 
     // Mid buildings with glow: flickering orange windows
@@ -5571,166 +5605,39 @@ function drawBurningVillage() {
   const baseY = GROUND_Y + 8; // sits just at/below ground line (distant, behind ground)
   const wrapW = W + 1800;
 
+  const shadow = 'rgb(8,5,3)';
+  const shadowLight = 'rgb(14,9,6)';
+
   for (const v of burningVillage) {
-    // Parallax wrap
     let sx = ((v.x - offset) % wrapW + wrapW) % wrapW - 300;
     if (sx + v.w < -60 || sx > W + 60) continue;
 
     const bx = sx;
     const by = baseY - v.h;
-    const lean = v.lean;
 
     ctx.save();
-    // Apply slight structural lean
-    if (lean !== 0) {
-      ctx.transform(1, 0, lean, 1, 0, 0);
+    if (v.lean !== 0) {
+      ctx.transform(1, 0, v.lean, 1, 0, 0);
     }
 
-    // ── All structures drawn as deep shadow silhouettes ──
-    const shadow = 'rgb(8,5,3)';
-    const shadowLight = 'rgb(14,9,6)';
+    // Wall
+    ctx.fillStyle = shadow;
+    ctx.fillRect(bx, by, v.w, v.h);
 
-    if (v.type === 'collapsed') {
-      // Rubble heap — jagged low polygon
-      ctx.fillStyle = shadow;
-      ctx.beginPath();
-      ctx.moveTo(bx, baseY);
-      ctx.lineTo(bx + 3, baseY - v.h * 0.8);
-      ctx.lineTo(bx + v.w * 0.3, baseY - v.h);
-      ctx.lineTo(bx + v.w * 0.5, baseY - v.h * 0.6);
-      ctx.lineTo(bx + v.w * 0.7, baseY - v.h * 0.9);
-      ctx.lineTo(bx + v.w, baseY - v.h * 0.3);
-      ctx.lineTo(bx + v.w, baseY);
-      ctx.closePath();
-      ctx.fill();
-    } else {
-      // ── Main wall ──
-      ctx.fillStyle = shadow;
-      ctx.fillRect(bx, by, v.w, v.h);
+    // Edge highlight on the left side
+    ctx.fillStyle = shadowLight;
+    ctx.fillRect(bx, by, 2, v.h);
 
-      // Slight edge highlight on one side
-      ctx.fillStyle = shadowLight;
-      ctx.fillRect(bx, by, 2, v.h);
-
-      // ── Roof ──
-      if (v.roofStyle === 'peaked') {
-        ctx.fillStyle = shadow;
-        ctx.beginPath();
-        ctx.moveTo(bx - 4, by);
-        ctx.lineTo(bx + v.w / 2, by - v.roofH);
-        ctx.lineTo(bx + v.w + 4, by);
-        ctx.closePath();
-        ctx.fill();
-      } else if (v.roofStyle === 'pointed') {
-        // Tall spire for towers
-        ctx.fillStyle = shadow;
-        ctx.beginPath();
-        ctx.moveTo(bx - 2, by);
-        ctx.lineTo(bx + v.w / 2, by - v.roofH * 1.5);
-        ctx.lineTo(bx + v.w + 2, by);
-        ctx.closePath();
-        ctx.fill();
-      } else if (v.roofStyle === 'curved') {
-        // Pagoda-style curved eaves
-        ctx.fillStyle = shadow;
-        ctx.beginPath();
-        ctx.moveTo(bx - 8, by + 2);
-        // Left eave curves up
-        ctx.quadraticCurveTo(bx + v.w * 0.15, by - v.roofH * 0.4, bx + v.w / 2, by - v.roofH);
-        // Right eave curves up
-        ctx.quadraticCurveTo(bx + v.w * 0.85, by - v.roofH * 0.4, bx + v.w + 8, by + 2);
-        ctx.closePath();
-        ctx.fill();
-        // Second tier (smaller)
-        if (v.h > 40) {
-          ctx.beginPath();
-          const tier2Y = by + v.h * 0.4;
-          ctx.moveTo(bx - 5, tier2Y + 2);
-          ctx.quadraticCurveTo(bx + v.w * 0.2, tier2Y - 6, bx + v.w / 2, tier2Y - 10);
-          ctx.quadraticCurveTo(bx + v.w * 0.8, tier2Y - 6, bx + v.w + 5, tier2Y + 2);
-          ctx.closePath();
-          ctx.fill();
-        }
-      } else if (v.roofStyle === 'flat') {
-        // Flat roof with slight lip
-        ctx.fillStyle = shadowLight;
-        ctx.fillRect(bx - 2, by - 2, v.w + 4, 3);
-      }
-
-      // ── Chimney ──
-      if (v.hasChimney) {
-        ctx.fillStyle = shadow;
-        const cx = bx + v.w * 0.75;
-        ctx.fillRect(cx, by - v.roofH * 0.6, 5, v.roofH * 0.6 + 4);
-      }
-
-      // ── Dark window holes (barely visible against shadow) ──
-      ctx.fillStyle = 'rgb(3,2,1)';
-      const winSize = Math.min(5, v.w / 6);
-      const cols = Math.max(1, Math.floor(v.w / 14));
-      const rows = Math.max(1, Math.floor(v.h / 18));
-      for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-          const wx = bx + 5 + col * (v.w - 10) / Math.max(1, cols);
-          const wy = by + 8 + row * 16;
-          if (wy < baseY - 8) {
-            ctx.fillRect(wx, wy, winSize, winSize + 1);
-          }
-        }
-      }
-    }
+    // Peaked roof
+    ctx.fillStyle = shadow;
+    ctx.beginPath();
+    ctx.moveTo(bx - 4, by);
+    ctx.lineTo(bx + v.w / 2, by - v.roofH);
+    ctx.lineTo(bx + v.w + 4, by);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.restore();
-
-    // ── FIRE EFFECTS — subtle, small, distant ──
-    const fi = v.fireIntensity;
-    const phase = v.firePhase;
-    const t = frameCount * 0.04;
-
-    // Small, sparse flame tips along the roofline
-    const flameCount = Math.floor(1 + fi * 2);
-    const roofTop = v.type === 'collapsed' ? baseY - v.h : by - v.roofH * 0.5;
-
-    for (let f = 0; f < flameCount; f++) {
-      const frac = (f + 0.5) / flameCount;
-      const sway = Math.sin(t * 2.5 + phase + f * 3.1) * 1.2;
-      const fx = bx + v.w * frac + sway;
-
-      // Gentle flicker
-      const flickerMul = 0.5 + 0.5 * Math.sin(t * 3.0 + phase + f * 2.3);
-      const flameH = (4 + fi * 7) * flickerMul;
-      const flameW = 2 + fi * 2;
-
-      // Single small flame shape — muted orange
-      ctx.globalAlpha = 0.25 + 0.2 * flickerMul;
-      ctx.fillStyle = flickerMul > 0.6 ? '#aa4400' : '#773300';
-      ctx.beginPath();
-      ctx.moveTo(fx - flameW / 2, roofTop);
-      ctx.quadraticCurveTo(fx, roofTop - flameH * 0.7, fx + sway * 0.15, roofTop - flameH);
-      ctx.quadraticCurveTo(fx, roofTop - flameH * 0.7, fx + flameW / 2, roofTop);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-
-    // ── Faint warm glow — very subtle ──
-    const glowPulse = 0.04 + 0.04 * Math.sin(t * 1.5 + phase);
-    ctx.globalAlpha = glowPulse * fi;
-    ctx.fillStyle = '#ff4400';
-    ctx.fillRect(bx - 4, roofTop - v.h * 0.2, v.w + 8, v.h * 0.3);
-    ctx.globalAlpha = 1;
-
-    // ── One or two faint embers drifting up ──
-    if (fi > 0.4) {
-      const ePhase = t * 0.6 + phase;
-      const life = (ePhase % 3.0) / 3.0;
-      const ex = bx + v.w * 0.5 + Math.sin(ePhase * 1.1) * v.w * 0.3;
-      const ey = roofTop - life * 25 - 3;
-      ctx.globalAlpha = (1 - life) * 0.3;
-      ctx.fillStyle = '#cc5522';
-      ctx.fillRect(ex, ey, 1, 1);
-      ctx.globalAlpha = 1;
-    }
   }
 }
 
@@ -6850,8 +6757,12 @@ function drawSingleTree(t) {
   if (t.collapsed) return;
   if (!_treeConstsReady) _updateTreeConsts();
   const P = 4;
-  const sx = t.worldX - scrollOffset;
-  const baseY = getGroundY(t.worldX);
+  // Back-layer trees scroll slower for a sense of distance; mid/front scroll 1:1
+  const parallaxFactor = t.layer === 'back' ? 0.6 : 1.0;
+  const sx = t.worldX - scrollOffset * parallaxFactor;
+  // Ground Y must be queried at the tree's on-screen position, not its raw worldX,
+  // otherwise the slope computation misaligns for parallax-scaled back trees.
+  const baseY = getGroundY(sx + scrollOffset);
 
   const isSmall = t.size === 'small';
   const img   = isSmall ? smallTreeImg   : treeImg;
@@ -9226,7 +9137,7 @@ function draw() {
       _updateTreeConsts();
       for (const t of trees) {
         if (t.layer !== 'back') continue;
-        const sx = t.worldX - scrollOffset;
+        const sx = t.worldX - scrollOffset * 0.6; // match drawSingleTree parallax
         if (sx < -200 || sx > W + 200) continue;
         drawSingleTree(t);
       }
