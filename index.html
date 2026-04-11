@@ -1355,56 +1355,17 @@ function generateTrees() {
     const canopyWidths = { medium: 50, tall: 60 };
     const canopyHeights = { medium: 24, tall: 30 };
     const trunkWidths = { medium: 12, tall: 16 };
-    // Some trees sit lower — partially buried or on uneven ground
-    const sinkRoll = Math.random();
-    const sinkExtra = sinkRoll < 0.35 ? 10 + Math.random() * 25 : 0;
-    // Assign depth layer: ~30% back, ~40% mid (platforms), ~30% front
-    const layerRoll = Math.random();
-    const layer = layerRoll < 0.3 ? 'back' : layerRoll < 0.7 ? 'mid' : 'front';
     trees.push({
       worldX: wx,
       size: size,
-      layer: layer,
       height: heights[size],
       canopyW: canopyWidths[size],
       canopyH: canopyHeights[size],
       trunkW: trunkWidths[size],
       flipped: Math.random() < 0.5,
-      sinkExtra: sinkExtra,
       burning: false,
       burnTimer: 0,
-      collapsed: false,
-      igniteAt: -1
-    });
-  }
-
-  // Extra decorative back-layer trees — denser, silhouettes only.
-  // Some are scheduled to catch fire at random times during the level.
-  const heights = { medium: 100, tall: 140 };
-  const canopyWidths = { medium: 50, tall: 60 };
-  const canopyHeights = { medium: 24, tall: 30 };
-  const trunkWidths = { medium: 12, tall: 16 };
-  for (let wx = 120; wx < 10000; wx += 75 + Math.random() * 110) {
-    const size = Math.random() < 0.55 ? 'medium' : 'tall';
-    const sinkExtra = Math.random() < 0.3 ? 8 + Math.random() * 20 : 0;
-    // ~20% of decorative back trees will randomly ignite during the level
-    const igniteAt = Math.random() < 0.2
-      ? 180 + Math.floor(Math.random() * 3000) // 3-53 seconds into the level
-      : -1;
-    trees.push({
-      worldX: wx,
-      size: size,
-      layer: 'back',
-      height: heights[size],
-      canopyW: canopyWidths[size],
-      canopyH: canopyHeights[size],
-      trunkW: trunkWidths[size],
-      flipped: Math.random() < 0.5,
-      sinkExtra: sinkExtra,
-      burning: false,
-      burnTimer: 0,
-      collapsed: false,
-      igniteAt
+      collapsed: false
     });
   }
 }
@@ -3496,18 +3457,18 @@ function update() {
   }
 
   // Tree platform collision (volcano horizontal only)
+  let onTallTree = false;
   if (isVolcanoLevel() && !verticalMode) {
-    let onTree = false;
     for (const t of trees) {
-      if (t.collapsed || t.layer === 'back') continue; // mid + front trees have platforms
+      if (t.collapsed) continue;
       const tsx = t.worldX - scrollOffset;
       if (tsx < -100 || tsx > W + 100) continue;
       const baseY = getGroundY(t.worldX);
-      const layerScale = t.layer === 'front' ? 1.15 : 1.0;
-      const totalH = (t.height + t.canopyH) * layerScale;
-      const platTop = baseY - totalH * 0.6; // platform at 60% of tree height
-      const platBot = platTop + t.canopyH * layerScale * 0.3;
-      const halfW = (t.canopyW * layerScale) / 2;
+      const tallOffset = t.size === 'tall' ? 28 : 0;
+      const totalH = t.height + t.canopyH;
+      const platTop = baseY + tallOffset - totalH * 0.6;
+      const platBot = platTop + t.canopyH * 0.3;
+      const halfW = t.canopyW / 2;
       if (
         player.vy >= 0 &&
         player.x + player.w > tsx - halfW &&
@@ -3520,18 +3481,13 @@ function update() {
         player.grounded = true;
         player.jumping = false;
         player.doubleJumped = false;
-        // Scale player based on tree layer
-        player.depthScale = t.layer === 'front' ? 1.12 : 1.0;
-        onTree = true;
+        if (t.size === 'tall') onTallTree = true;
       }
     }
-    // Reset scale when back on ground
-    if (!onTree && player.grounded) {
-      player.depthScale += (1 - player.depthScale) * 0.15; // smooth lerp back
-    }
-  } else {
-    player.depthScale = 1;
   }
+  // Player is slightly larger when perched in a tall (foreground) tree
+  const targetDepthScale = onTallTree ? 1.12 : 1.0;
+  player.depthScale += (targetDepthScale - player.depthScale) * 0.2;
 
   // Firetruck ladder platform collision (extended ladder trucks only)
   for (const v of vehicles) {
@@ -3853,21 +3809,10 @@ function update() {
     }
   }
 
-  // Scheduled ignition for decorative back-layer trees
-  if (isVolcanoLevel()) {
-    for (const t of trees) {
-      if (t.layer !== 'back' || t.burning || t.collapsed) continue;
-      if (t.igniteAt > 0 && levelTimer >= t.igniteAt) {
-        t.burning = true;
-      }
-    }
-  }
-
   // Lava-tree contact detection
   if (isVolcanoLevel()) {
     for (const t of trees) {
       if (t.burning || t.collapsed) continue;
-      if (t.layer === 'back') continue; // back trees are purely decorative
       const tsx = t.worldX - scrollOffset;
       const baseY = getGroundY(t.worldX);
       const treeTop = baseY - t.height - t.canopyH;
@@ -4002,7 +3947,7 @@ function update() {
       // Player collision — knockback only, no kill, no invincibility
       if (!r.hitCooldown) {
         const sx = r.worldX - scrollOffset;
-        const cy = getGroundY(r.worldX) - r.radius + (r.bounceY || 0);
+        const cy = getGroundY(r.worldX) - r.radius + (r.bounceY || 0) + 14;
         const px = player.x + player.w / 2;
         const py = player.y + player.h / 2;
         const dx = px - sx;
@@ -4073,7 +4018,7 @@ function update() {
       }
       // Player collision — INSTANT KILL
       const sx = mr.worldX - scrollOffset;
-      const cy = getGroundY(mr.worldX) - mr.radius;
+      const cy = getGroundY(mr.worldX) - mr.radius + 14;
       const px = player.x + player.w / 2;
       const py = player.y + player.h / 2;
       const dx = px - sx;
@@ -6751,59 +6696,34 @@ function drawSingleTree(t) {
   if (t.collapsed) return;
   if (!_treeConstsReady) _updateTreeConsts();
   const P = 4;
-  // Back-layer trees scroll slower for a sense of distance; mid/front scroll 1:1
-  const parallaxFactor = t.layer === 'back' ? 0.6 : 1.0;
-  const sx = t.worldX - scrollOffset * parallaxFactor;
-  // Ground Y must be queried at the tree's on-screen position, not its raw worldX,
-  // otherwise the slope computation misaligns for parallax-scaled back trees.
-  const baseY = getGroundY(sx + scrollOffset);
+  const sx = t.worldX - scrollOffset;
+  const baseY = getGroundY(t.worldX);
 
-  const isSmall = t.size === 'small';
-  const img   = isSmall ? smallTreeImg   : treeImg;
-  const ready = isSmall ? smallTreeImgReady : treeImgReady;
-  const cSrcX = isSmall ? _treeSmSrcX : _treeLgSrcX;
-  const cSrcY = isSmall ? _treeSmSrcY : _treeLgSrcY;
-  const cSrcW = isSmall ? _treeSmSrcW : _treeLgSrcW;
-  const cSrcH = isSmall ? _treeSmSrcH : _treeLgSrcH;
+  const img = treeImg;
+  const ready = treeImgReady;
+  const cSrcX = _treeLgSrcX;
+  const cSrcY = _treeLgSrcY;
+  const cSrcW = _treeLgSrcW;
+  const cSrcH = _treeLgSrcH;
 
   const totalH = t.height + t.canopyH;
   const aspect = cSrcW / cSrcH;
-  // Layer-specific scale: back trees smaller, front trees larger
-  const layerScale = t.layer === 'back' ? 0.75 : t.layer === 'front' ? 1.15 : 1.0;
-  const drawH = totalH * layerScale;
+  const drawH = totalH;
   const drawW = drawH * aspect;
 
   const burnProg = t.burning ? Math.min(t.burnTimer / 210, 1) : 0;
-  const groundSink = (isSmall ? drawH * 0.18 : drawH * 0.12) + (t.sinkExtra || 0);
-
-  // Layer-specific opacity
-  const layerAlpha = t.layer === 'back' ? 0.6 : t.layer === 'front' ? 0.9 : 1.0;
+  const tallOffset = t.size === 'tall' ? 28 : 0;
+  const groundSink = drawH * 0.12 + tallOffset;
 
   if (ready) {
     ctx.save();
-    ctx.globalAlpha = layerAlpha;
     ctx.translate(sx, baseY + groundSink);
     ctx.rotate(-_treeSlopeAngle);
     if (t.flipped) ctx.scale(-1, 1);
     ctx.imageSmoothingEnabled = false;
 
-    if (t.layer === 'back') {
-      // Back trees are black silhouettes — draw tree then overlay black
-      const offW = Math.ceil(drawW) + 4;
-      const offH = Math.ceil(drawH) + 4;
-      const offCvs = document.createElement('canvas');
-      offCvs.width = offW;
-      offCvs.height = offH;
-      const offCtx = offCvs.getContext('2d');
-      offCtx.imageSmoothingEnabled = false;
-      offCtx.drawImage(img, cSrcX, cSrcY, cSrcW, cSrcH, 2, 2, drawW, drawH);
-      offCtx.globalCompositeOperation = 'source-atop';
-      offCtx.fillStyle = '#0a0a0a';
-      offCtx.fillRect(0, 0, offW, offH);
-      offCtx.globalCompositeOperation = 'source-over';
-      ctx.drawImage(offCvs, -drawW / 2 - 2, -drawH - 2);
-    } else if (burnProg > 0) {
-      ctx.globalAlpha = layerAlpha * (1 - burnProg * 0.3);
+    if (burnProg > 0) {
+      ctx.globalAlpha = 1 - burnProg * 0.3;
       const offW = Math.ceil(drawW) + 4;
       const offH = Math.ceil(drawH) + 4;
       const offCvs = document.createElement('canvas');
@@ -8452,7 +8372,7 @@ function drawSingleRock(r) {
   const baseY = getGroundY(r.worldX);
   const rad = r.radius;
   const cx = Math.floor(sx / P) * P;
-  const cy = Math.floor((baseY - rad + rad * 0.1 + (r.bounceY || 0)) / P) * P;
+  const cy = Math.floor((baseY - rad + rad * 0.1 + (r.bounceY || 0) + 14) / P) * P;
   const seed = (((r.originX || r.worldX) * 2654435761) >>> 0);
 
   ctx.save();
@@ -8526,7 +8446,7 @@ function drawSingleMoltenRock(mr) {
   const baseY = getGroundY(mr.worldX);
   const rad = mr.radius;
   const cx = Math.floor(sx / P) * P;
-  const cy = Math.floor((baseY - rad + rad * 0.1 + (mr.bounceY || 0)) / P) * P;
+  const cy = Math.floor((baseY - rad + rad * 0.1 + (mr.bounceY || 0) + 14) / P) * P;
   const seed = (((mr.originX || mr.worldX) * 2654435761) >>> 0);
 
   ctx.save();
@@ -9138,14 +9058,7 @@ function draw() {
 
       playerDrawnInDepth = true;
     } else if (isVolcanoLevel()) {
-      // ── LAYER 1: BACK TREES (behind ground + player) ──
       _updateTreeConsts();
-      for (const t of trees) {
-        if (t.layer !== 'back') continue;
-        const sx = t.worldX - scrollOffset * 0.6; // match drawSingleTree parallax
-        if (sx < -200 || sx > W + 200) continue;
-        drawSingleTree(t);
-      }
       // ── CLIFF TRANSITION: cliff wall scrolls in from the right — draw BEFORE ground so ground stays in front ──
       if (level === 6 && cliffTransition > 0 && !verticalMode) {
         const P = 4;
@@ -9238,11 +9151,11 @@ function draw() {
       drawStreet();
     }
     if (isVolcanoLevel()) {
-      // ── LAYER 2: GROUND LAYER — lava pits, lava pools, mid trees, rocks, player ──
+      // ── GROUND LAYER — non-tall trees (background), lava, rocks, player ──
       if (level === 5) drawLavaPits();
       drawLavaPools();
       for (const t of trees) {
-        if (t.layer !== 'mid') continue;
+        if (t.size === 'tall') continue; // tall trees render in the foreground pass
         const sx = t.worldX - scrollOffset;
         if (sx < -200 || sx > W + 200) continue;
         drawSingleTree(t);
@@ -9260,9 +9173,9 @@ function draw() {
       drawPlayer();
       playerDrawnInDepth = true;
 
-      // ── LAYER 3: FRONT TREES (in front of player, rocks, and pools) ──
+      // ── FOREGROUND — tall trees (drawn in front of player, rocks, and pools) ──
       for (const t of trees) {
-        if (t.layer !== 'front') continue;
+        if (t.size !== 'tall') continue;
         const sx = t.worldX - scrollOffset;
         if (sx < -200 || sx > W + 200) continue;
         drawSingleTree(t);
